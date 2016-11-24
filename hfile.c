@@ -422,6 +422,19 @@ off_t hseek(hFILE *fp, off_t offset, int whence)
     return pos;
 }
 
+// Swap from reading to writing for files opened read-write.
+// Internal use only!
+int hwrite_after_read(hFILE *fp) {
+    // Reposition backend file pointer, so flushes go to the right place.
+    off_t currpos = htell(fp);
+    off_t pos = fp->backend->seek(fp, currpos, SEEK_SET);
+    if (pos < 0) return -1;
+    // Switch to writing mode.  Discards anything that was previously read.
+    fp->end = fp->begin = fp->buffer;
+    fp->offset = currpos;
+    return 0;
+}
+
 int hclose(hFILE *fp)
 {
     int err = fp->has_errno;

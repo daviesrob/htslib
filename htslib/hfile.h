@@ -207,6 +207,11 @@ hread(hFILE *fp, void *buffer, size_t nbytes)
 static inline int hputc(int c, hFILE *fp)
 {
     extern int hputc2(int, hFILE *);
+    extern int hwrite_after_read(hFILE *);
+
+    if (fp->mobile && fp->end > fp->begin) {
+        if (hwrite_after_read(fp) < 0) return -1;
+    }
     if (fp->begin < fp->limit) *(fp->begin++) = c;
     else c = hputc2(c, fp);
     return c;
@@ -218,9 +223,13 @@ static inline int hputc(int c, hFILE *fp)
 static inline int hputs(const char *text, hFILE *fp)
 {
     extern int hputs2(const char *, size_t, size_t, hFILE *);
+    extern int hwrite_after_read(hFILE *);
 
     size_t nbytes = strlen(text), n = fp->limit - fp->begin;
     if (n > nbytes) n = nbytes;
+    if (fp->mobile && fp->end > fp->begin) {
+        if (hwrite_after_read(fp) < 0) return -1;
+    }
     memcpy(fp->begin, text, n);
     fp->begin += n;
     return (n == nbytes)? 0 : hputs2(text, nbytes, n, fp);
@@ -235,9 +244,13 @@ static inline ssize_t HTS_RESULT_USED
 hwrite(hFILE *fp, const void *buffer, size_t nbytes)
 {
     extern ssize_t hwrite2(hFILE *, const void *, size_t, size_t);
+    extern int hwrite_after_read(hFILE *);
 
     size_t n = fp->limit - fp->begin;
     if (n > nbytes) n = nbytes;
+    if (fp->mobile && fp->end > fp->begin) {
+        if (hwrite_after_read(fp) < 0) return -1;
+    }
     memcpy(fp->begin, buffer, n);
     fp->begin += n;
     return (n==nbytes)? (ssize_t) n : hwrite2(fp, buffer, nbytes, n);
