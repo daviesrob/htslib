@@ -137,7 +137,7 @@ enum htsExactFormat {
     unknown_format,
     binary_format, text_format,
     sam, bam, bai, cram, crai, vcf, bcf, csi, gzi, tbi, bed,
-    json,
+    json, encrypted,
     format_maximum = 32767
 };
 

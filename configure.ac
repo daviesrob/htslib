@@ -82,6 +82,12 @@ AC_ARG_ENABLE([lzma],
                   [omit support for LZMA-compressed CRAM files])],
   [], [enable_lzma=yes])
 
+AC_ARG_ENABLE([hfile_crypto],
+  [AS_HELP_STRING([--enable-hfile_crypto],
+		  [enable experimental encrypted file support])],
+  [], [enable_hfile_crypto=no])
+AC_SUBST(enable_hfile_crypto)
+
 AC_ARG_ENABLE([plugins],
   [AS_HELP_STRING([--enable-plugins],
                   [enable separately-compiled plugins for file access])],
@@ -340,6 +346,25 @@ if test "$s3" = enabled ; then
 fi
 AC_SUBST([s3])
 AC_SUBST([CRYPTO_LIBS])
+
+if test $enable_hfile_crypto != no; then
+  if test $enable_plugins = no; then
+    AC_MSG_ERROR([--enable-hfile_crypto requires plugins to be enabled.
+
+Please re-run configure with --enable-plugins.])
+  fi
+  save_LIBS=$LIBS
+  ssl_devel=ok
+  AC_CHECK_HEADER([openssl/evp.h], [], [ssl_devel=missing], [;])
+dnl  AC_CHECK_LIB([crypto], [EVP_EncryptInit_ex],
+dnl    [AC_DEFINE([HAVE_OPENSSL], 1, [Define if openssl is present])],
+dnl    [ssl_devel=missing])
+  LIBS=$save_LIBS
+  if test $ssl_devel != ok; then
+    AC_MSG_ERROR([openssl development files either not found or too old.])
+  fi
+  AC_DEFINE([ENABLE_HFILE_CRYPTO], 1, [Define if hfile_crypto enabled])
+fi
 
 AC_SUBST([pc_requires])
 AC_SUBST([private_LIBS])

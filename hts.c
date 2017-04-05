@@ -110,6 +110,9 @@ static enum htsFormatCategory format_category(enum htsExactFormat fmt)
     case json:
         return unknown_category;
 
+    case encrypted:
+        return unknown_category;
+
     case unknown_format:
     case binary_format:
     case text_format:
@@ -290,6 +293,12 @@ int hts_detect_format(hFILE *hfile, htsFormat *fmt)
         fmt->version.major = fmt->version.minor = -1;
         return 0;
     }
+    else if (len > 8 && memcmp(s, "crypt4gh", 8) == 0) {
+        fmt->category = unknown_category;
+        fmt->format = encrypted;
+        fmt->version.major = fmt->version.minor = -1;
+        return 0;
+    }
     else {
         // Various possibilities for tab-delimited text:
         // .crai   (gzipped tab-delimited six columns: seqid 5*number)
@@ -328,6 +337,7 @@ char *hts_format_description(const htsFormat *format)
     case csi:   kputs("CSI", &str); break;
     case tbi:   kputs("Tabix", &str); break;
     case json:  kputs("JSON", &str); break;
+    case encrypted: kputs("encrypted", &str); break;
     default:    kputs("unknown", &str); break;
     }
 

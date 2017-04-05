@@ -207,6 +207,7 @@ hread(hFILE *fp, void *buffer, size_t nbytes)
 static inline int hputc(int c, hFILE *fp)
 {
     extern int hputc2(int, hFILE *);
+
     if (fp->begin < fp->limit) *(fp->begin++) = c;
     else c = hputc2(c, fp);
     return c;

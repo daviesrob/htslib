@@ -80,6 +80,18 @@ noplugin_LIBS += $(CRYPTO_LIBS)
 hfile_s3$(PLUGIN_EXT): LIBS += $(CRYPTO_LIBS)
 endif
 
+ifeq "hfile_crypto-@enable_hfile_crypto@" "hfile_crypto-yes"
+
+LIBHFILE_CRYPTO_LIBS = -lcrypto
+
+plugin_OBJS += hfile_crypto.o
+
+hfile_crypto$(PLUGIN_EXT): LIBS += $(LIBHFILE_CRYPTO_LIBS)
+
+noplugin_LIBS += $(LIBHFILE_CRYPTO_LIBS)
+
+endif
+
 ifeq "plugins-@enable_plugins@" "plugins-yes"
 
 plugindir  = @plugindir@

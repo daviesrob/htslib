@@ -860,23 +860,46 @@ static const struct hFILE_scheme_handler *find_scheme_handler(const char *s)
     return (k != kh_end(schemes))? kh_value(schemes, k) : &unknown_scheme;
 }
 
+// Open a wrapper, which modifies the behaviour of an underlying hFILE
+hFILE *hopen_wrapper(const char *scheme, hFILE *hfile, const char *mode) {
+    const struct hFILE_scheme_handler *handler = find_scheme_handler(scheme);
+
+    if (handler && handler->priority >= 3000 && handler->open_wrapper) {
+        return handler->open_wrapper(hfile, mode);
+    }
+    errno = ENOTSUP;
+    return NULL;
+}
+
 hFILE *hopen(const char *fname, const char *mode, ...)
 {
     const struct hFILE_scheme_handler *handler = find_scheme_handler(fname);
+    hFILE *fp = NULL;
+
     if (handler) {
-        if (strchr(mode, ':') == NULL) return handler->open(fname, mode);
+        if (strchr(mode, ':') == NULL) fp = handler->open(fname, mode);
         else if (handler->priority >= 2000 && handler->vopen) {
-            hFILE *fp;
             va_list arg;
             va_start(arg, mode);
             fp = handler->vopen(fname, mode, arg);
             va_end(arg);
-            return fp;
         }
         else { errno = ENOTSUP; return NULL; }
     }
-    else if (strcmp(fname, "-") == 0) return hopen_fd_stdinout(mode);
-    else return hopen_fd(fname, mode);
+    else if (strcmp(fname, "-") == 0) fp = hopen_fd_stdinout(mode);
+    else fp = hopen_fd(fname, mode);
+#ifdef ENABLE_HFILE_CRYPTO
+    // Check for encrypted files
+    if (fp && strchr(mode, 'r') != NULL) {
+        char buffer[8];
+        ssize_t len = hpeek(fp, buffer, sizeof(buffer));
+        if (len == 8 && memcmp(buffer, "crypt4gh", 8) == 0) {
+            hFILE *fp2 = hopen_wrapper("crypto:", fp, mode);
+            if (fp2) return fp2;
+        }
+    }
+#endif
+    return fp;
 }
 
 int hfile_always_local (const char *fname) { return 0; }

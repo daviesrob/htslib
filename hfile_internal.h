@@ -106,6 +106,12 @@ struct hFILE_scheme_handler {
        to hopen().  */
     hFILE *(*vopen)(const char *filename, const char *mode, va_list args)
         HTS_RESULT_USED;
+
+    /* Fields below are present when priority >= 3000.  */
+
+    /* Open a wrapper that modifies the behaviour of an existing hFILE */
+    hFILE *(*open_wrapper)(hFILE *hfile, const char *mode)
+        HTS_RESULT_USED;
 };
 
 /* May be used as an isremote() function in simple cases.  */
