@@ -819,14 +819,20 @@ static int crypto_is_remote(const char *fname) {
     return hisremote(fname); // FIXME: possible infinite recursion?
 }
 
-int hfile_plugin_init(struct hFILE_plugin *self) {
+int PLUGIN_GLOBAL(hfile_plugin_init,_crypto)(struct hFILE_plugin *self) {
     static const struct hFILE_scheme_handler handler =
         { hopen_crypto, crypto_is_remote, "hfile_crypto",
           3000 + 50,
           vhopen_crypto, hopen_crypto_wrapper };
+
+#ifdef ENABLE_PLUGINS
     // Embed version string for examination via strings(1) or what(1)
     static const char id[] = "@(#)hfile_crypto plugin (htslib)\t" HTS_VERSION;
-    const char *version = strchr(id, '\t')+1;
+    if (hts_verbose >= 9) {
+        fprintf(stderr, "[M::hfile_crypto.init] version %s\n",
+                strchr(id, '\t')+1);
+    }
+#endif
 
     ERR_load_crypto_strings();
 

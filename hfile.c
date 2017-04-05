@@ -814,6 +814,9 @@ static void load_hfile_plugins()
 #ifdef ENABLE_S3
     init_add_plugin(NULL, hfile_plugin_init_s3, "s3");
 #endif
+#ifdef ENABLE_HFILE_CRYPTO
+    init_add_plugin(NULL, hfile_plugin_init_crypto, "crypto");
+#endif
 
 #endif
 

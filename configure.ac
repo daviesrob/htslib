@@ -348,11 +348,6 @@ AC_SUBST([s3])
 AC_SUBST([CRYPTO_LIBS])
 
 if test $enable_hfile_crypto != no; then
-  if test $enable_plugins = no; then
-    AC_MSG_ERROR([--enable-hfile_crypto requires plugins to be enabled.
-
-Please re-run configure with --enable-plugins.])
-  fi
   save_LIBS=$LIBS
   ssl_devel=ok
   AC_CHECK_HEADER([openssl/evp.h], [], [ssl_devel=missing], [;])
