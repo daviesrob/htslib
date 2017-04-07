@@ -23,7 +23,7 @@ You also need `gpg`, installed as `/usr/bin/gpg`.
 Run configure:
 
 ```
-./configure --enable-plugins --enable-hfile_crypto --with-plugin-path=`pwd`
+./configure --enable-hfile_crypto
 ```
 
 Run make:
