@@ -38,6 +38,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <openssl/evp.h>
 #include <openssl/err.h>
 
+#include "htslib/hts_endian.h"
 #include "hts_internal.h"
 #include "hfile_internal.h"
 #include "version.h"
@@ -49,6 +50,9 @@ DEALINGS IN THE SOFTWARE.  */
 #define CRYPTO_BUFFER_LENGTH 65536
 #define RECIPIENT_ENV_VAR "HTS_CRYPT_TO"
 #define MAGIC "crypt4gh"
+#define PROTO_VERSION 1
+
+#define MAX_IV_LEN 16
 
 typedef enum {
     AES_256_CTR = 0,
@@ -56,20 +60,39 @@ typedef enum {
 } hCryptType;
 
 typedef struct {
+    uint8_t key[32];
+    uint8_t iv[16];
+} aes_256_params;
+
+typedef struct {
+    uint64_t plain_start;
+    uint64_t plain_end;
+    uint64_t cipher_start;
+    int64_t  ctr_offset;
+    uint32_t method;
+    union {
+        aes_256_params a256;
+    } u;
+} Encryption_params;
+
+typedef struct {
     hFILE base;
     hFILE *parent;
     off_t real_data_start;
-    uint8_t *crypt_in;
-    uint8_t *crypt_out;
+    EVP_CIPHER_CTX *ctx;
     uint8_t *key;
     uint8_t *iv;
-    EVP_CIPHER_CTX *ctx;
+    Encryption_params *recs;
+    uint32_t num_recs;
+    uint32_t recnum;
     uint64_t last_ctr;
-    hCryptType type;
-    int keylen;
-    int ivlen;
-    int blocklen;
-    int shift;
+    uint32_t keylen;
+    uint32_t ivlen;
+    uint32_t blocklen;
+    uint32_t shift;
+    uint8_t ctr[MAX_IV_LEN];
+    uint8_t crypt_in[CRYPTO_BUFFER_LENGTH];
+    uint8_t crypt_out[CRYPTO_BUFFER_LENGTH];
 } hFILE_crypto;
 
 static int disclaimed = 0;
@@ -99,27 +122,47 @@ static void dump_ssl_errors() {
     }
 }
 
-static int ssl_init_encryption(hFILE_crypto *fp, hCryptType type) {
+static int ssl_init_encryption(hFILE_crypto *fp, uint32_t recnum) {
     const EVP_CIPHER *cipher = NULL;
-    switch (type) {
-    case AES_256_CTR: cipher = EVP_aes_256_ctr(); break;
+
+    switch (fp->recs[recnum].method) {
+    case AES_256_CTR:
+        cipher = EVP_aes_256_ctr();
+        fp->keylen = sizeof(fp->recs[recnum].u.a256.key);
+        fp->ivlen = sizeof(fp->recs[recnum].u.a256.iv);
+        fp->blocklen = 16;
+        fp->shift = 4;
+        fp->key = fp->recs[recnum].u.a256.key;
+        fp->iv = fp->recs[recnum].u.a256.iv;
+        break;
     default: break;
     }
 
     if (cipher == NULL) {
         if (hts_verbose > 1)
             fprintf(stderr,
-                    "[E::%s] Couldn't get cipher %d\n", __func__, type);
-        if (type >= 0 && type < NUM_CRYPT_TYPES) dump_ssl_errors();
+                    "[E::%s] Couldn't get cipher %u\n", __func__,
+                    fp->recs[recnum].method);
+        if (fp->recs[recnum].method >= 0
+            && fp->recs[recnum].method < NUM_CRYPT_TYPES) {
+            dump_ssl_errors();
+        }
         errno = ENOTSUP;
         return -1;
     }
 
-    fp->type = type;
-    fp->key = NULL;
-    fp->crypt_in = NULL;
+    if (fp->recnum < fp->num_recs
+        && fp->recs[recnum].method == fp->recs[fp->recnum].method) {
+        // Just changing key & iv settings; cipher stays the same
+        fp->recnum = recnum;
+        fp->last_ctr = UINT64_MAX;
+        return 0;
+    }
+
+    fp->recnum = recnum;
 
     // Set up EVP context, find key, iv and block lengths
+    if (fp->ctx) EVP_CIPHER_CTX_free(fp->ctx);
     fp->ctx = EVP_CIPHER_CTX_new();
     if (!fp->ctx) {
         if (hts_verbose > 1)
@@ -137,40 +180,15 @@ static int ssl_init_encryption(hFILE_crypto *fp, hCryptType type) {
         goto fail;
     }
     EVP_CIPHER_CTX_set_padding(fp->ctx, 0);
-    fp->keylen   = EVP_CIPHER_CTX_key_length(fp->ctx);
-    fp->ivlen    = EVP_CIPHER_CTX_iv_length(fp->ctx);
-    //fp->blocklen = EVP_CIPHER_CTX_block_size(fp->ctx);
-    fp->blocklen = fp->ivlen; // Why does the line above not work??
+    // Paranoia checks
+    assert(fp->keylen == EVP_CIPHER_CTX_key_length(fp->ctx));
+    assert(fp->ivlen == EVP_CIPHER_CTX_iv_length(fp->ctx));
     assert(fp->ivlen >= 2 * sizeof(uint64_t));
+    assert(fp->ivlen <= MAX_IV_LEN);
     assert(fp->blocklen > 0 && fp->blocklen < 256);
-
-    // Work out shift to convert file pos to counter value
-    for (fp->shift = 0; (1 << fp->shift) < fp->blocklen; fp->shift++) {}
     assert((1 << fp->shift) == fp->blocklen);
 
-    // Allocate space for key and iv
-    fp->key = malloc(fp->keylen + fp->ivlen);
-    if (fp->key == NULL) {
-        if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Allocating keys: %s\n",
-                    __func__, strerror(errno));
-        goto fail;
-    }
-    fp->iv = fp->key + fp->keylen;
-
-    // Allocate input and output buffers.  Must be longer than
-    // CRYPTO_BUFFER_LENGTH to account for possible incomplete blocks due to
-    // reads or writes not starting exactly on a block boundary
-    fp->crypt_in = malloc(2 * (CRYPTO_BUFFER_LENGTH + 2 * fp->blocklen));
-    if (fp->crypt_in == NULL) {
-        if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Allocating buffers: %s\n",
-                    __func__, strerror(errno));
-        goto fail;
-    }
-    fp->crypt_out = fp->crypt_in + CRYPTO_BUFFER_LENGTH + 2 * fp->blocklen;
-
-    fp->last_ctr = 0xffffffffffffffffULL;
+    fp->last_ctr = UINT64_MAX;
  
     return 0;
 
@@ -230,8 +248,6 @@ static int ssl_decrypt_block(hFILE_crypto *fp, uint8_t *out, size_t n) {
 
 static void ssl_clear_encryption(hFILE_crypto *fp) {
     // Free the SSL related bits of hFILE_crypto
-    free(fp->key);
-    free(fp->crypt_in);
     if (fp->ctx) EVP_CIPHER_CTX_free(fp->ctx);
 }
 
@@ -334,7 +350,7 @@ static int write_to_backend(hFILE_crypto *fp, uint32_t skip, size_t len) {
 
 static int write_encryption_header(hFILE_crypto *fp) {
     char cmd[256];
-    uint8_t bytes[16];
+    uint8_t bytes[4 * sizeof(uint64_t) + sizeof(uint32_t)];
     char *recipient;
     FILE *tmp = NULL;
     FILE *gpg = NULL;
@@ -354,6 +370,7 @@ static int write_encryption_header(hFILE_crypto *fp) {
         return -1;
     }
 
+    // FIXME: Not portable!
     tmpfd = fileno(tmp);
     r = snprintf(cmd, sizeof(cmd), 
                  "/usr/bin/gpg --batch -r '%s' -e > /dev/fd/%d",
@@ -371,15 +388,43 @@ static int write_encryption_header(hFILE_crypto *fp) {
         goto fail;
     }
 
-    bytes[0] = fp->type;
-    memset(bytes + 1, 0, 3);
-    if (fwrite(bytes, 4, 1, gpg) != 1
-        || fwrite(fp->key, fp->keylen, 1, gpg) != 1
-        || fwrite(fp->iv, fp->ivlen, 1, gpg) != 1) {
+    u32_to_le(fp->num_recs, bytes);
+    if (fwrite(bytes, 4, 1, gpg) != 1) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Write to gpg failed: %s\n",
                     __func__, strerror(errno));
         goto fail;
+    }
+
+    for (i = 0; i < fp->num_recs; i++) {
+        uint8_t *key, *iv;
+        uint32_t keylen, ivlen;
+
+        u64_to_le(fp->recs[i].plain_start,  &bytes[0]);
+        u64_to_le(fp->recs[i].plain_end,    &bytes[8]);
+        u64_to_le(fp->recs[i].cipher_start, &bytes[16]);
+        i64_to_le(fp->recs[i].ctr_offset,   &bytes[24]);
+        u32_to_le(fp->recs[i].method,       &bytes[32]);
+
+        switch (fp->recs[i].method) {
+          case AES_256_CTR:
+            key = fp->recs[i].u.a256.key;
+            keylen = sizeof(fp->recs[i].u.a256.key);
+            iv = fp->recs[i].u.a256.iv;
+            ivlen = sizeof(fp->recs[i].u.a256.iv);
+            break;
+          default:
+            abort(); // Should never happen...
+        }
+
+        if (fwrite(bytes, 36, 1, gpg) != 1
+            || fwrite(key, keylen, 1, gpg) != 1
+            || fwrite(iv, ivlen, 1, gpg) != 1) {
+            if (hts_verbose > 1)
+                fprintf(stderr, "[E::%s] Write to gpg failed: %s\n",
+                        __func__, strerror(errno));
+            goto fail;    
+        }
     }
     r = pclose(gpg);
     gpg = NULL;
@@ -403,9 +448,8 @@ static int write_encryption_header(hFILE_crypto *fp) {
     }
 
     memcpy(fp->crypt_out, MAGIC, 8);
-    for (i = 0; i < 8; i++) {
-        fp->crypt_out[i + 8] = ((l + 16) >> i*8) & 0xff;
-    }
+    u32_to_le(PROTO_VERSION, fp->crypt_out + 8);
+    u32_to_le(l + 16, fp->crypt_out + 12);
     if (write_to_backend(fp, 0, 16) != 0) goto fail;
 
     for (i = 0; i < l; i += CRYPTO_BUFFER_LENGTH) {
@@ -436,13 +480,50 @@ static int write_encryption_header(hFILE_crypto *fp) {
     return -1;
 }
 
+static int encryption_rec_compare(const void *va, const void *vb) {
+    const Encryption_params *a = (const Encryption_params *) va;
+    const Encryption_params *b = (const Encryption_params *) vb;
+
+    if (a->plain_start < b->plain_start) return -1;
+    if (a->plain_start > b->plain_start) return  1;
+    return 0;
+}
+
+static int sanity_check_header(hFILE_crypto *fp) {
+    uint32_t i;
+
+    for (i = 0; i < fp->num_recs; i++) {
+        if (fp->recs[i].plain_start > fp->recs[i].plain_end) {
+            if (hts_verbose > 1)
+                fprintf(stderr,
+                        "[E::%s] Start after end in encryption header.\n",
+                        __func__);
+        }
+        if (i > 0 && fp->recs[i].plain_start < fp->recs[i - 1].plain_end) {
+            if (hts_verbose > 1)
+                fprintf(stderr,
+                        "[E::%s] Encryption header has overlapping records\n",
+                        __func__);
+            return -1;
+        }
+        if (fp->recs[i].ctr_offset < 0
+            && -fp->recs[i].ctr_offset > fp->recs[i].plain_start) {
+            if (hts_verbose > 1)
+                fprintf(stderr,
+                        "[E::%s] Invalid encryption header counter offset\n",
+                        __func__);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int read_encryption_header(hFILE_crypto *fp) {
     char cmd[256];
     uint8_t bytes[4096];
     FILE *tmp = NULL;
     FILE *gpg = NULL;
     uint64_t len;
-    uint32_t crypt_type;
     size_t i;
     int r, tmpfd, save_errno;
 
@@ -458,9 +539,13 @@ static int read_encryption_header(hFILE_crypto *fp) {
                     __func__);
         goto fail;
     }
-    for (len = 0, i = 0; i < 8; i++) {
-        len |= ((uint64_t) bytes[8 + i]) << 8*i;
+    if (le_to_u32(&bytes[8]) > PROTO_VERSION) {
+        if (hts_verbose > 1)
+            fprintf(stderr, "[E::%s] Unsupported protocol version\n",
+                    __func__);
+        goto fail;
     }
+    len = le_to_u32(&bytes[12]);
     if (len < 16) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Encryption data offset too small\n",
@@ -500,6 +585,7 @@ static int read_encryption_header(hFILE_crypto *fp) {
         goto fail;
     }
 
+    // FIXME: Not portable!
     r = snprintf(cmd, sizeof(cmd), "/usr/bin/gpg -d /dev/fd/%d", tmpfd);
     if (r < 0 || r >= sizeof(cmd)) {
         if (hts_verbose > 1)
@@ -517,19 +603,65 @@ static int read_encryption_header(hFILE_crypto *fp) {
     }
     if (fread(bytes, 4, 1, gpg) != 1) {
         if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Failed to read encryption type\n",
+            fprintf(stderr, "[E::%s] Failed to read number of records\n",
                     __func__);
         goto fail;
     }
-    crypt_type = bytes[0] | (bytes[1]<<8) | (bytes[2]<<16) | (bytes[3]<<24);
-    if (ssl_init_encryption(fp, crypt_type) != 0) goto fail;
-    if (fread(fp->key, fp->keylen, 1, gpg) != 1
-        || fread(fp->iv, fp->ivlen, 1, gpg) != 1) {
+    fp->num_recs = le_to_u32(bytes);
+    if (fp->num_recs == 0) {
         if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Failed to get encryption key\n",
+            fprintf(stderr, "[E::%s] No encryption records\n",
                     __func__);
         goto fail;
     }
+    fp->recs = calloc(fp->num_recs, sizeof(fp->recs[0]));
+    if (!fp->recs) {
+        if (hts_verbose > 1)
+            fprintf(stderr, "[E::%s] Allocating encryption records: %s\n",
+                    __func__, strerror(errno));
+        goto fail;
+    }
+
+    for (i = 0; i < fp->num_recs; i++) {
+        uint8_t *key, *iv;
+        uint32_t keylen, ivlen;
+
+        if (fread(bytes, 36, 1, gpg) != 1) {
+            if (hts_verbose > 1)
+                fprintf(stderr, "[E::%s] Failed to read encryption record\n",
+                        __func__);
+            goto fail;
+        }
+        fp->recs[i].plain_start  = le_to_u64(&bytes[0]);
+        fp->recs[i].plain_end    = le_to_u64(&bytes[8]);
+        fp->recs[i].cipher_start = le_to_u64(&bytes[16]);
+        fp->recs[i].ctr_offset   = le_to_i64(&bytes[24]);
+        fp->recs[i].method       = le_to_u32(&bytes[32]);
+
+        switch (fp->recs[i].method) {
+          case AES_256_CTR:
+            key = fp->recs[i].u.a256.key;
+            keylen = sizeof(fp->recs[i].u.a256.key);
+            iv = fp->recs[i].u.a256.iv;
+            ivlen = sizeof(fp->recs[i].u.a256.iv);
+            break;
+          default:
+            if (hts_verbose > 1) 
+                fprintf(stderr, "[E::%s] Invalid encryption type %u\n",
+                        __func__, fp->recs[i].method);
+            goto fail;
+        }
+        
+        if (fread(key, keylen, 1, gpg) != 1
+            || fread(iv, ivlen, 1, gpg) != 1) {
+            if (hts_verbose > 1) 
+                fprintf(stderr, "[E::%s] Failed to read encryption key/iv\n",
+                        __func__);
+            goto fail;
+        }
+    }
+
+
     r = pclose(gpg);
     gpg = NULL;
     if (r != 0) {
@@ -537,6 +669,14 @@ static int read_encryption_header(hFILE_crypto *fp) {
             fprintf(stderr, "[E::%s] Error running gpg.\n", __func__);
         goto fail;
     }
+
+    // Ensure records are in plain-text order
+    qsort(fp->recs, fp->num_recs, sizeof(fp->recs[0]),
+          encryption_rec_compare);
+
+    if (sanity_check_header(fp) != 0) goto fail;
+
+    if (ssl_init_encryption(fp, 0) != 0) goto fail;
 
     fclose(tmp); // Don't really care if this fails
 
@@ -554,12 +694,22 @@ static int read_encryption_header(hFILE_crypto *fp) {
 
 static int change_counter(hFILE_crypto *fp, uint64_t ctr) {
     // Openssl counter is big-endian
-    int i;
-    for (i = sizeof(ctr); i > 0; --i) {
-        fp->iv[fp->ivlen - i] = (ctr >> (i - 1)*8) & 0xff;
+    int i, j;
+    uint16_t sum = 0;
+
+    assert(fp->key != NULL);
+    assert(fp->iv  != NULL);
+
+    for (i = 0, j = fp->ivlen - 1; i < sizeof(ctr); i++, --j) {
+        sum = (sum >> 8) + ((ctr >> i*8) & 0xff) + fp->iv[j];
+        fp->ctr[j] = sum & 0xff;
+    }
+    for (; j >= 0; --j) {
+        sum = (sum >> 8) + fp->iv[j];
+        fp->ctr[j] = sum & 0xff;
     }
 
-    if (EVP_EncryptInit_ex(fp->ctx, NULL, NULL, fp->key, fp->iv) != 1) {
+    if (EVP_EncryptInit_ex(fp->ctx, NULL, NULL, fp->key, fp->ctr) != 1) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Failed to set encryption parameters\n",
                     __func__);
@@ -572,15 +722,58 @@ static int change_counter(hFILE_crypto *fp, uint64_t ctr) {
     return 0;
 }
 
-static ssize_t crypto_read(hFILE *fpv, void *buffer, size_t nbytes) {
-    hFILE_crypto *fp = (hFILE_crypto *) fpv;
-    uint8_t *buf = (uint8_t *) buffer;
+static int find_encryption_record(hFILE_crypto *fp, off_t offset) {
+    uint32_t start, end;
+
+    if (offset >= fp->recs[fp->num_recs - 1].plain_start) {
+        return fp->num_recs - 1;
+    }
+
+    start = 0;
+    end = fp->num_recs - 1;
+
+    while (start < end) {
+        uint32_t mid = (start + end) / 2;
+        if (fp->recs[mid].plain_start > offset) end = mid;
+        if (fp->recs[mid].plain_end <= offset) start = mid + 1;
+    }
+
+    assert(start < fp->num_recs);
+    return start;
+}
+
+static int change_encryption_block(hFILE_crypto *fp, off_t offset) {
+    off_t parent_pos, cipher_pos;
+    uint32_t recnum = find_encryption_record(fp, offset);
+
+    if (recnum == fp->recnum) return 0;
+
+    if (ssl_init_encryption(fp, recnum) != 0) return -1;
+
+    parent_pos = htell(fp->parent);
+    cipher_pos = ((offset >= fp->recs[fp->recnum].plain_start
+                   ? offset - fp->recs[fp->recnum].plain_start : 0)
+                  + fp->recs[fp->recnum].cipher_start
+                  + fp->real_data_start);
+    if (cipher_pos != parent_pos) {
+        parent_pos = hseek(fp->parent, cipher_pos, SEEK_SET);
+        if (parent_pos < 0) {
+            if (hts_verbose > 1)
+                fprintf(stderr,
+                        "[E::%s] Couldn't seek to next encryption block: %s\n",
+                        __func__, strerror(errno));
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static ssize_t crypto_read_part(hFILE_crypto *fp, uint8_t *buf,
+                                size_t nbytes, off_t offset) {
     ssize_t i = 0;
     uint64_t ctr;
     uint64_t mask = fp->blocklen - 1;
-    // Need to adjust fp->base.offset by the number of bytes already read
-    // from the buffer to find the true file position
-    off_t offset = fp->base.offset + (fp->base.end - fp->base.buffer);
     uint32_t remainder;
 
     if (!fp->parent) {
@@ -588,7 +781,7 @@ static ssize_t crypto_read(hFILE *fpv, void *buffer, size_t nbytes) {
         return EOF;
     }
 
-    ctr = offset >> fp->shift;
+    ctr = (offset + fp->recs[fp->recnum].ctr_offset) >> fp->shift;
     if (ctr != fp->last_ctr) {
         if (change_counter(fp, ctr) != 0) return EOF;
     }
@@ -626,6 +819,58 @@ static ssize_t crypto_read(hFILE *fpv, void *buffer, size_t nbytes) {
     return i;
 }
 
+static ssize_t crypto_read(hFILE *fpv, void *buffer, size_t nbytes) {
+    hFILE_crypto *fp = (hFILE_crypto *) fpv;
+    uint8_t *buf = (uint8_t *) buffer;
+    // Need to adjust fp->base.offset by the number of bytes already read
+    // from the buffer to find the true file position
+    off_t offset = fp->base.offset + (fp->base.end - fp->base.buffer);
+    ssize_t i = 0;
+    
+    while (nbytes > 0) {
+        ssize_t got;
+        size_t to_get;
+
+        if ((offset < fp->recs[fp->recnum].plain_start
+             && fp->recnum > 0 && offset < fp->recs[fp->recnum].plain_end)
+            || (offset >= fp->recs[fp->recnum].plain_end
+                && fp->recnum < fp->num_recs - 1)) {
+            if (change_encryption_block(fp, offset) != 0) return EOF;
+        }
+
+        if (offset < fp->recs[fp->recnum].plain_start) {
+            offset = fp->recs[fp->recnum].plain_start;
+        }
+
+        if (fp->recnum < fp->num_recs - 1) {
+            to_get = (offset + nbytes < fp->recs[fp->recnum].plain_end
+                      ? nbytes
+                      : fp->recs[fp->recnum].plain_end - offset);
+        } else {
+            to_get = nbytes;
+        }
+
+        if (to_get > 0) {
+            got = crypto_read_part(fp, buf + i, to_get, offset);
+            if (got < 0) return EOF;
+            if (got == 0) break;
+        } else {
+            // This shouldn't (in theory) happen, but maybe there's a
+            // zero length encryption block?  Assertion checks that
+            // progress is still possible.
+            assert(offset >= fp->recs[fp->recnum].plain_end);
+            got = 0;
+        }
+
+        i += got;
+        nbytes -= got;
+        offset += got;
+        if (got < to_get) break;
+    }
+
+    return i;
+}
+
 static ssize_t crypto_write(hFILE *fpv, const void *buffer, size_t nbytes) {
     hFILE_crypto *fp = (hFILE_crypto *) fpv;
     uint8_t *buf = (uint8_t *) buffer;
@@ -638,7 +883,18 @@ static ssize_t crypto_write(hFILE *fpv, const void *buffer, size_t nbytes) {
         return EOF;
     }
 
-    ctr = fp->base.offset >> fp->shift;
+    if (fp->recnum < fp->num_recs - 1
+        || fp->base.offset < fp->recs[fp->recnum].plain_start) {
+        if (hts_verbose > 1) {
+            fprintf(stderr,
+                    "[E::%s] Sorry, writing to fragmented encrypted files"
+                    " is not supported\n", __func__);
+            errno = ENOTSUP;
+            return EOF;
+        }
+    }
+
+    ctr = (fp->base.offset + fp->recs[fp->recnum].ctr_offset) >> fp->shift;
     if (ctr != fp->last_ctr) {
         if (change_counter(fp, ctr) != 0) return EOF;
     }
@@ -669,11 +925,61 @@ static ssize_t crypto_write(hFILE *fpv, const void *buffer, size_t nbytes) {
 static off_t crypto_seek(hFILE *fpv, off_t offset, int whence) {
     hFILE_crypto *fp = (hFILE_crypto *) fpv;
     off_t pos;
+    uint32_t recnum;
 
-    if (whence == SEEK_SET) {
-        offset += fp->real_data_start;
+    switch (whence) {
+      case SEEK_SET:
+        break;
+      case SEEK_CUR:
+        pos = htell(&fp->base);
+        if (pos + offset < 0) {
+            fp->base.has_errno = errno = (offset < 0)? EINVAL : EOVERFLOW;
+            return -1;
+        }
+        offset += pos;
+        whence = SEEK_SET;
+        break;
+      case SEEK_END: {
+          uint32_t rn = fp->num_recs - 1;
+          // Find out how long the underlying file is
+          pos = hseek(fp->parent, 0, SEEK_END);
+          if (pos < 0) {
+              if (hts_verbose > 1)
+                  fprintf(stderr, "[E::%s] Seek failed : %s\n",
+                          __func__, strerror(errno));
+              return pos;
+          }
+          while (rn > 0 && pos < fp->recs[rn].cipher_start) --rn;
+          // Convert to offset into block
+          pos -= fp->recs[rn].cipher_start + fp->real_data_start;
+          if (pos < 0) pos = 0;
+          // Convert to plaintext position
+          pos += fp->recs[rn].plain_start;
+          if (pos > fp->recs[rn].plain_end) pos = fp->recs[rn].plain_end;
+          // Get the absolute position
+          offset += pos;
+          whence = SEEK_SET;
+          break;
+      }
+      default:
+        errno = EINVAL;
+        return -1;
     }
-    pos = hseek(fp->parent, offset, whence);
+
+    recnum = find_encryption_record(fp, offset);
+    if (recnum != fp->recnum) {
+        if (ssl_init_encryption(fp, recnum) != 0) return -1;
+    }
+
+    if (offset < fp->recs[recnum].plain_start) {
+        offset = fp->recs[recnum].plain_start;
+    }
+
+    // Convert to parent offset
+    pos = (offset - fp->recs[recnum].plain_start
+           + fp->recs[recnum].cipher_start + fp->real_data_start);
+    
+    pos = hseek(fp->parent, pos, whence);
     if (pos < 0) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Seek failed : %s\n",
@@ -688,9 +994,9 @@ static off_t crypto_seek(hFILE *fpv, off_t offset, int whence) {
         errno = EIO;
         return -1;
     }
-    pos -= fp->real_data_start;
-    fp->base.offset = pos;
-    return pos;
+
+    fp->base.offset = offset;
+    return offset;
 }
 
 static int crypto_flush(hFILE *fpv) {
@@ -720,22 +1026,41 @@ static const struct hFILE_backend crypto_backend = {
     crypto_read, crypto_write, crypto_seek, crypto_flush, crypto_close
 };
 
+static inline void init_hfile_crypto(hFILE_crypto *fp) {
+    fp->ctx = NULL;
+    fp->key = fp->iv = NULL;
+    fp->recs = NULL;
+    fp->num_recs = 0;
+    fp->recnum = UINT32_MAX;
+    fp->last_ctr = 0;
+    fp->keylen = fp->ivlen = fp->blocklen = fp->shift = 0;
+    memset(fp->ctr, 0, sizeof(fp->ctr));
+    memset(fp->crypt_in, 0, sizeof(fp->crypt_in));
+    memset(fp->crypt_out, 0, sizeof(fp->crypt_out));
+}
+
 static hFILE *init_for_write(hFILE *hfile, const char *mode) {
     hFILE_crypto *fp;
 
     fp = (hFILE_crypto *) hfile_init(sizeof(hFILE_crypto), mode, 0);
     if (fp == NULL) return NULL;
 
-    fp->crypt_in = fp->crypt_out = NULL;
-    fp->key = fp->iv = NULL;
-    fp->ctx = NULL;
+    init_hfile_crypto(fp);
     fp->parent = hfile;
 
-    if (ssl_init_encryption(fp, AES_256_CTR)) goto fail;
-    if (get_random_bytes(fp->key, fp->keylen + fp->ivlen - sizeof(uint64_t))) {
+    fp->recs = calloc(1, sizeof(Encryption_params));
+    if (!fp->recs) goto fail;
+    fp->num_recs = 1;
+    fp->recs[0].plain_start = 0;
+    fp->recs[0].plain_end = UINT64_MAX;
+    fp->recs[0].cipher_start = 0;
+    fp->recs[0].ctr_offset = 0;
+    fp->recs[0].method = AES_256_CTR;
+    if (get_random_bytes(&fp->recs[0].u.a256.key[0], sizeof(fp->recs[0].u.a256))) {
         goto fail;
     }
-    memset(fp->iv + fp->ivlen - sizeof(uint64_t), 0, sizeof(uint64_t));
+
+    if (ssl_init_encryption(fp, 0)) goto fail;
 
     if (write_encryption_header(fp) != 0) goto fail;
 
@@ -754,9 +1079,7 @@ static hFILE *init_for_read(hFILE *hfile, const char *mode) {
     fp = (hFILE_crypto *) hfile_init(sizeof(hFILE_crypto), mode, 0);
     if (fp == NULL) return NULL;
 
-    fp->crypt_in = fp->crypt_out = NULL;
-    fp->key = fp->iv = NULL;
-    fp->ctx = NULL;
+    init_hfile_crypto(fp);
     fp->parent = hfile;
 
     if (read_encryption_header(fp) != 0) goto fail;
