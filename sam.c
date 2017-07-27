@@ -377,20 +377,39 @@ static void swap_data(const bam1_core_t *c, int l_data, uint8_t *data, int is_ho
     for (i = 0; i < c->n_cigar; ++i) ed_swap_4p(&cigar[i]);
 }
 
+const static int32_t long_cigar_marker = -8;
+
 int bam_read1(BGZF *fp, bam1_t *b)
 {
     bam1_core_t *c = &b->core;
     int32_t block_len, ret, i;
     uint32_t x[8];
+    int long_cigar = 0;
     if ((ret = bgzf_read(fp, &block_len, 4)) != 4) {
         if (ret == 0) return -1; // normal end-of-file
         else return -2; // truncated
     }
+    if (fp->is_be)
+        ed_swap_4p(&block_len);
+
+    if (block_len == long_cigar_marker) {
+        /* Hack to allow storage of long CIGAR strings, needed as the
+           original BAM format only allowed 16 bits.  The real block_len
+           is in the next four bytes, and the real CIGAR is stored
+           after the 32 bytes of core data */
+        long_cigar = 1;
+        if ((ret = bgzf_read(fp, &block_len, 4)) != 4)
+            return -2;
+        if (fp->is_be)
+            ed_swap_4p(&block_len);
+        block_len -= 8;
+    }
+
     if (bgzf_read(fp, x, 32) != 32) return -3;
     if (fp->is_be) {
-        ed_swap_4p(&block_len);
         for (i = 0; i < 8; ++i) ed_swap_4p(x + i);
     }
+
     c->tid = x[0]; c->pos = x[1];
     c->bin = x[2]>>16; c->qual = x[2]>>8&0xff; c->l_qname = x[2]&0xff;
     c->l_extranul = (c->l_qname%4 != 0)? (4 - c->l_qname%4) : 0;
@@ -400,6 +419,14 @@ int bam_read1(BGZF *fp, bam1_t *b)
     c->l_qseq = x[4];
     c->mtid = x[5]; c->mpos = x[6]; c->isize = x[7];
     b->l_data = block_len - 32 + c->l_extranul;
+
+    if (long_cigar) {  // Get the real n_cigar
+        if ((ret = bgzf_read(fp, &c->n_cigar, 4)) != 4)
+            return -2;
+        if (fp->is_be)
+            ed_swap_4p(&c->n_cigar);
+    }
+
     if (b->l_data < 0 || c->l_qseq < 0 || c->l_qname < 1) return -4;
     if (((uint64_t) c->n_cigar << 2) + c->l_qname + c->l_extranul
         + (((uint64_t) c->l_qseq + 1) >> 1) + c->l_qseq > (uint64_t) b->l_data)
@@ -427,31 +454,39 @@ int bam_read1(BGZF *fp, bam1_t *b)
 int bam_write1(BGZF *fp, const bam1_t *b)
 {
     const bam1_core_t *c = &b->core;
-    uint32_t x[8], block_len = b->l_data - c->l_extranul + 32, y;
+    int long_cigar = c->n_cigar >= 65536;
+    uint32_t x[9];
+    uint32_t block_len = b->l_data - c->l_extranul + 32 + (long_cigar ? 8 : 0);
+    uint32_t y;
     int i, ok;
-    if (c->n_cigar >= 65536) {
-        hts_log_error("Too many CIGAR operations (%d >= 64K for QNAME \"%s\")", c->n_cigar, bam_get_qname(b));
-        errno = EOVERFLOW;
-        return -1;
-    }
     x[0] = c->tid;
     x[1] = c->pos;
     x[2] = (uint32_t)c->bin<<16 | c->qual<<8 | (c->l_qname - c->l_extranul);
-    x[3] = (uint32_t)c->flag<<16 | c->n_cigar;
+    x[3] = (uint32_t)c->flag<<16 | (long_cigar ? 0 : c->n_cigar);
     x[4] = c->l_qseq;
     x[5] = c->mtid;
     x[6] = c->mpos;
     x[7] = c->isize;
+    x[8] = c->n_cigar;
     ok = (bgzf_flush_try(fp, 4 + block_len) >= 0);
+    if (long_cigar) {
+        /* Hack to allow storage of long CIGAR strings, needed as the
+           original BAM format only allowed 16 bits.  Write a special
+           block_len (-8) that is invalid in ordinary BAM files.
+           The real block_len is in the next four bytes, and the real CIGAR
+           length is stored after the 32 bytes of core data */
+        y = fp->is_be ? ed_swap_4(long_cigar_marker) : long_cigar_marker;
+        if (ok) ok = (bgzf_write(fp, &y, 4) >= 0);
+    }
     if (fp->is_be) {
-        for (i = 0; i < 8; ++i) ed_swap_4p(x + i);
+        for (i = 0; i < 9; ++i) ed_swap_4p(x + i);
         y = block_len;
         if (ok) ok = (bgzf_write(fp, ed_swap_4p(&y), 4) >= 0);
         swap_data(c, b->l_data, b->data, 1);
     } else {
         if (ok) ok = (bgzf_write(fp, &block_len, 4) >= 0);
     }
-    if (ok) ok = (bgzf_write(fp, x, 32) >= 0);
+    if (ok) ok = (bgzf_write(fp, x, long_cigar ? 36 : 32) >= 0);
     if (ok) ok = (bgzf_write(fp, b->data, c->l_qname - c->l_extranul) >= 0);
     if (ok) ok = (bgzf_write(fp, b->data + c->l_qname, b->l_data - c->l_qname) >= 0);
     if (fp->is_be) swap_data(c, b->l_data, b->data, 0);
