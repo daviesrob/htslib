@@ -44,6 +44,7 @@ test_command($opts,cmd=>'test-bcf-translate -',out=>'test-bcf-translate.out');
 test_convert_padded_header($opts);
 test_rebgzip($opts);
 test_logging($opts);
+test_hfile_threads($opts);
 
 print "\nNumber of tests:\n";
 printf "    total   .. %d\n", $$opts{nok}+$$opts{nfailed};
@@ -409,4 +410,29 @@ sub test_logging
   my ($ret,$out) = _cmd($cmd);
   if ( $ret ) { failed($opts,$test); }
   else { passed($opts,$test); }
+}
+
+sub test_hfile_threads
+{
+    my ($opts) = @_;
+
+    delete local $ENV{http_proxy}; # Prevent attempts to proxy localhost
+
+    my $test = 'test_hfile_threads';
+    my $web;
+    if (!open($web, '-|', "$$opts{path}/microweb", '-m', '1')) {
+	failed($opts,$test,"Couldn't start web server");
+	return;
+    }
+    my $host_port = <$web>;
+    chomp($host_port);
+    unless ($host_port) {
+	close($web); # Should terminate microweb
+	failed($opts,$test,"Didn't get host:port from microweb");
+    }
+
+    my $cmd = "$$opts{path}/test_hfile_threads -@ 4 http://$host_port/chargen/100000";
+    my $expected = "test_hfile_threads.out";
+    test_cmd($opts, cmd => $cmd, out => $expected);
+    close($web); # Should terminate microweb
 }

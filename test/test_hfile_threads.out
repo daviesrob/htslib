@@ -1,0 +1,12 @@
+run_test_single : Download  0 sum = 7949376
+run_test_single : Download  1 sum = 7949376
+run_test_single : Download  2 sum = 7949376
+run_test_single : Download  3 sum = 7949376
+run_test_threads : Download  0 sum = 7949376
+run_test_threads : Download  1 sum = 7949376
+run_test_threads : Download  2 sum = 7949376
+run_test_threads : Download  3 sum = 7949376
+run_test_threads2 : Download  0 sum = 7949376
+run_test_threads2 : Download  1 sum = 7949376
+run_test_threads2 : Download  2 sum = 7949376
+run_test_threads2 : Download  3 sum = 7949376

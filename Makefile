@@ -70,8 +70,10 @@ BUILT_TEST_PROGRAMS = \
 	test/hts_endian \
 	test/fieldarith \
 	test/hfile \
+	test/microweb \
 	test/sam \
 	test/test_bgzf \
+	test/test_hfile_threads \
 	test/test-regidx \
 	test/test_view \
 	test/test-vcf-api \
@@ -383,11 +385,17 @@ test/fieldarith: test/fieldarith.o libhts.a
 test/hfile: test/hfile.o libhts.a
 	$(CC) $(LDFLAGS) -o $@ test/hfile.o libhts.a $(LIBS) -lpthread
 
+test/microweb: test/microweb.o
+	$(CC) $(LDFLAGS) -o $@ test/microweb.o $(LIBS) -lpthread
+
 test/sam: test/sam.o libhts.a
 	$(CC) $(LDFLAGS) -o $@ test/sam.o libhts.a $(LIBS) -lpthread
 
 test/test_bgzf: test/test_bgzf.o libhts.a
 	$(CC) $(LDFLAGS) -o $@ test/test_bgzf.o libhts.a -lz $(LIBS) -lpthread
+
+test/test_hfile_threads: test/test_hfile_threads.o libhts.a
+	$(CC) $(LDFLAGS) -o $@ test/test_hfile_threads.o libhts.a -lz $(LIBS) -lpthread
 
 test/test-regidx: test/test-regidx.o libhts.a
 	$(CC) $(LDFLAGS) -o $@ test/test-regidx.o libhts.a $(LIBS) -lpthread
