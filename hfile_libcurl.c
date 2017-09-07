@@ -57,6 +57,8 @@ typedef struct {
     unsigned closing : 1;   // informs callback that hclose() has been invoked
     unsigned finished : 1;  // wait_perform() tells us transfer is complete
     unsigned perform_again : 1;
+    unsigned is_read : 1;   // Opened in read mode
+    unsigned can_seek : 1;  // Can (attempt to) seek on this handle
     int nrunning;
     CURLM *multi;
 } hFILE_libcurl;
@@ -357,10 +359,16 @@ static ssize_t libcurl_write(hFILE *fpv, const void *bufferv, size_t nbytes)
 static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
 {
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
-
+    hFILE_libcurl temp_fp;
     CURLcode err;
     CURLMcode errm;
     off_t origin, pos;
+
+    if (!fp->is_read || !fp->can_seek) {
+        // Cowardly refuse to seek when writing or a previous seek failed.
+        errno = ESPIPE;
+        return -1;
+    }
 
     switch (whence) {
     case SEEK_SET:
@@ -387,36 +395,100 @@ static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
 
     pos = origin + offset;
 
-    errm = curl_multi_remove_handle(fp->multi, fp->easy);
-    if (errm != CURLM_OK) { errno = multi_errno(errm); return -1; }
-    fp->nrunning--;
-
     // TODO If we seem to be doing random access, use CURLOPT_RANGE to do
     // limited reads (e.g. about a BAM block!) so seeking can reuse the
     // existing connection more often.
 
-    err = curl_easy_setopt(fp->easy, CURLOPT_RESUME_FROM_LARGE,(curl_off_t)pos);
-    if (err != CURLE_OK) { errno = easy_errno(fp->easy, err); return -1; }
+    /*
+      Duplicate the easy handle, and use CURLOPT_RESUME_FROM_LARGE to open
+      a new request to the server, reading from the location that we want
+      to seek to.  If the new request works and returns the correct data,
+      the original easy handle in *fp is closed and replaced with the new
+      one.  If not, we close the new handle, leave *fp unchanged, set
+      errno to ESPIPE and return -1 so that the caller knows we can't seek.
+      This allows the caller to decide if it wants to continue reading from
+      fp, in the same way as it would if reading from a pipe.
+     */
 
+    memcpy(&temp_fp, fp, sizeof(temp_fp));
+    temp_fp.buffer.len = 0;
+    temp_fp.buffer.ptr.rd = NULL;
+    temp_fp.easy = curl_easy_duphandle(fp->easy);
+    if (!temp_fp.easy)
+        goto fail_early;
+
+    err = curl_easy_setopt(temp_fp.easy, CURLOPT_RESUME_FROM_LARGE,(curl_off_t)pos);
+    err |= curl_easy_setopt(temp_fp.easy, CURLOPT_PRIVATE, &temp_fp);
+    err |= curl_easy_setopt(temp_fp.easy, CURLOPT_WRITEDATA, &temp_fp);
+    if (err != CURLE_OK)
+        goto fail_easy;
+
+    temp_fp.buffer.len = 0;  // Ensures we only read the response headers
+    temp_fp.paused = temp_fp.finished = 0;
+
+    errm = curl_multi_add_handle(temp_fp.multi, temp_fp.easy);
+    if (errm != CURLM_OK) { errno = multi_errno(errm); return -1; }
+    temp_fp.nrunning++;
+
+    err = curl_easy_pause(temp_fp.easy, CURLPAUSE_CONT);
+    if (err != CURLE_OK)
+        goto fail_multi;
+
+    while (! temp_fp.paused && ! temp_fp.finished)
+        if (wait_perform(&temp_fp) < 0) goto fail_multi;
+
+    if (temp_fp.finished && temp_fp.final_result != CURLE_OK)
+        goto fail_multi;
+
+    // We've got a good response, close the original connection and
+    // replace it with the new one.
+
+    errm = curl_multi_remove_handle(fp->multi, fp->easy);
+    if (errm != CURLM_OK) {
+        curl_easy_reset(temp_fp.easy);
+        curl_multi_remove_handle(fp->multi, temp_fp.easy);
+        errno = multi_errno(errm);
+        return -1;
+    }
+    fp->nrunning--;
+
+    curl_easy_cleanup(fp->easy);
+    fp->easy = temp_fp.easy;
+    err = curl_easy_setopt(fp->easy, CURLOPT_WRITEDATA, fp);
+    err |= curl_easy_setopt(fp->easy, CURLOPT_PRIVATE, fp);
+    if (err != CURLE_OK) {
+        int save_errno = easy_errno(fp->easy, err);
+        curl_easy_reset(fp->easy);
+        errno = save_errno;
+        return -1;
+    }
     fp->buffer.len = 0;
-    fp->paused = fp->finished = 0;
+    fp->paused = temp_fp.paused;
+    fp->finished = temp_fp.finished;
+    fp->perform_again = temp_fp.perform_again;
+    fp->final_result = temp_fp.final_result;
 
     errm = curl_multi_add_handle(fp->multi, fp->easy);
     if (errm != CURLM_OK) { errno = multi_errno(errm); return -1; }
     fp->nrunning++;
 
-    err = curl_easy_pause(fp->easy, CURLPAUSE_CONT);
-    if (err != CURLE_OK) { errno = easy_errno(fp->easy, err); return -1; }
+    return pos;
 
-    while (! fp->paused && ! fp->finished)
-        if (wait_perform(fp) < 0) return -1;
-
-    if (fp->finished && fp->final_result != CURLE_OK) {
-        errno = easy_errno(fp->easy, fp->final_result);
+ fail_multi:
+    curl_easy_reset(temp_fp.easy); // Ensure no pointers to on-stack temp_fp
+    errm = curl_multi_remove_handle(temp_fp.multi, temp_fp.easy);
+    if (errm != CURLM_OK) {
+        errno = multi_errno(errm);
         return -1;
     }
-
-    return pos;
+ fail_easy:
+    curl_easy_cleanup(temp_fp.easy);
+ fail_early:
+    fp->can_seek = 0;  // Don't try to seek again
+    /* This value for errno may not be entirely true, but the caller may be
+       able to carry on with the existing handle. */
+    errno = ESPIPE;
+    return -1;
 }
 
 static int libcurl_close(hFILE *fpv)
@@ -484,6 +556,7 @@ libcurl_open(const char *url, const char *modes, struct curl_slist *headers)
     fp->buffer.len = 0;
     fp->final_result = (CURLcode) -1;
     fp->paused = fp->closing = fp->finished = fp->perform_again = 0;
+    fp->can_seek = 1;
     fp->nrunning = 0;
     fp->easy = NULL;
 
@@ -499,6 +572,7 @@ libcurl_open(const char *url, const char *modes, struct curl_slist *headers)
     if (mode == 'r') {
         err |= curl_easy_setopt(fp->easy, CURLOPT_WRITEFUNCTION, recv_callback);
         err |= curl_easy_setopt(fp->easy, CURLOPT_WRITEDATA, fp);
+        fp->is_read = 1;
     }
     else {
         struct curl_slist *list;
@@ -509,6 +583,7 @@ libcurl_open(const char *url, const char *modes, struct curl_slist *headers)
 
         list = curl_slist_append(fp->headers, "Transfer-Encoding: chunked");
         if (list) fp->headers = list; else goto error;
+        fp->is_read = 0;
     }
 
     err |= curl_easy_setopt(fp->easy, CURLOPT_SHARE, curl.share);
