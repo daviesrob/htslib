@@ -34,6 +34,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include "cram/cram.h"
 
 #include "htslib/sam.h"
+#include "htslib/hts_log.h"
 
 enum test_op {
     READ_COMPRESSED  = 1,
@@ -46,6 +47,7 @@ int main(int argc, char *argv[])
 {
     samFile *in;
     char *fn_ref = 0;
+    char *out_fn = "-";
     int flag = 0, c, clevel = -1, ignore_sam_err = 0;
     char moder[8];
     bam_hdr_t *h;
@@ -59,7 +61,7 @@ int main(int argc, char *argv[])
     int benchmark = 0;
     int nthreads = 0; // shared pool
 
-    while ((c = getopt(argc, argv, "DSIt:i:bCl:o:N:BZ:@:")) >= 0) {
+    while ((c = getopt(argc, argv, "DSIt:i:bCl:o:N:BZ:@:vw:")) >= 0) {
         switch (c) {
         case 'D': flag |= READ_CRAM; break;
         case 'S': flag |= READ_COMPRESSED; break;
@@ -74,17 +76,21 @@ int main(int argc, char *argv[])
         case 'B': benchmark = 1; break;
         case 'Z': extra_hdr_nuls = atoi(optarg); break;
         case '@': nthreads = atoi(optarg); break;
+        case 'v': hts_set_log_level(hts_get_log_level() + 1); break;
+        case 'w': out_fn = optarg; break;
         }
     }
     if (argc == optind) {
-        fprintf(stderr, "Usage: test_view [-DSI] [-t fn_ref] [-i option=value] [-bC] [-l level] [-o option=value] [-N num_reads] [-B] [-Z hdr_nuls] [-@ num_threads] <in.bam>|<in.sam>|<in.cram> [region]\n");
+        fprintf(stderr, "Usage: test_view [-vDSI] [-t fn_ref] [-i option=value] [-bC] [-l level] [-o option=value] [-N num_reads] [-B] [-Z hdr_nuls] [-@ num_threads] [-w <output_file>] <in.bam>|<in.sam>|<in.cram> [region]\n");
         fprintf(stderr, "\n");
+        fprintf(stderr, "-v: increase verbosity\n");
         fprintf(stderr, "-D: read CRAM format (mode 'c')\n");
         fprintf(stderr, "-S: read compressed BCF, BAM, FAI (mode 'b')\n");
         fprintf(stderr, "-I: ignore SAM parsing errors\n");
         fprintf(stderr, "-t: fn_ref: load CRAM references from the specificed fasta file instead of @SQ headers when writing a CRAM file\n");
         fprintf(stderr, "-i: option=value: set an option for CRAM input\n");
         fprintf(stderr, "\n");
+        fprintf(stderr, "-w: output file name [default: '-']\n");
         fprintf(stderr, "-b: write compressed BCF, BAM, FAI (mode 'b')\n");
         fprintf(stderr, "-C: write CRAM format (mode 'c')\n");
         fprintf(stderr, "-l 0-9: set zlib compression level\n");
@@ -128,7 +134,7 @@ int main(int argc, char *argv[])
     if (clevel >= 0 && clevel <= 9) sprintf(modew + 1, "%d", clevel);
     if (flag & WRITE_CRAM) strcat(modew, "c");
     else if (flag & WRITE_COMPRESSED) strcat(modew, "b");
-    out = hts_open("-", modew);
+    out = hts_open(out_fn, modew);
     if (out == NULL) {
         fprintf(stderr, "Error opening standard output\n");
         return EXIT_FAILURE;
