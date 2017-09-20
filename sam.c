@@ -117,11 +117,11 @@ static bam_hdr_t *hdr_from_dict(sdict_t *d)
     return h;
 }
 
-bam_hdr_t *bam_hdr_read(BGZF *fp)
+static bam_hdr_t *bam_hdr_read_common(BGZF *fp, int *version)
 {
     bam_hdr_t *h;
-    char buf[4];
-    int magic_len, has_EOF;
+    char buf[8];
+    int magic_len, has_EOF, vers = version ? *version : 0;
     int32_t i, name_len, num_names = 0;
     size_t bufsize;
     ssize_t bytes;
@@ -134,10 +134,15 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     }
     // read "BAM1"
     magic_len = bgzf_read(fp, buf, 4);
-    if (magic_len != 4 || strncmp(buf, "BAM\1", 4)) {
+    if (magic_len != 4 || strncmp(buf, "BAM", 3)) {
         hts_log_error("Invalid BAM binary header");
         return 0;
     }
+    if (buf[3] < 1 || buf[3] > 2 || (vers && vers != buf[3])) {
+        hts_log_error("Incorrect BAM version number");
+        return NULL;
+    }
+    vers = buf[3];
     h = bam_hdr_init();
     if (!h) goto nomem;
 
@@ -196,10 +201,23 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
             h->target_name[i][name_len] = '\0';
         }
 
-        bytes = bgzf_read(fp, &h->target_len[i], 4);
-        if (bytes != 4) goto read_err;
-        if (fp->is_be) ed_swap_4p(&h->target_len[i]);
+        if (vers == 1) {
+            bytes = bgzf_read(fp, &h->target_len[i], 4);
+            if (bytes != 4) goto read_err;
+            if (fp->is_be) ed_swap_4p(&h->target_len[i]);
+        } else {
+            uint64_t ref_len;
+            bytes = bgzf_read(fp, buf, 8);
+            if (bytes != 8) goto read_err;
+            ref_len = le_to_u64((uint8_t *) buf);
+            if (ref_len > UINT32_MAX) {
+                hts_log_error("Sorry, HTSlib does not support references "
+                              "longer than 4Gb yet.");
+                goto clean;
+            }
+        }
     }
+    if (version) *version = vers;
     return h;
 
  nomem:
@@ -225,12 +243,17 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     return NULL;
 }
 
-int bam_hdr_write(BGZF *fp, const bam_hdr_t *h)
+bam_hdr_t *bam_hdr_read(BGZF *fp) {
+    int vers = 1; // Force version 1
+    return bam_hdr_read_common(fp, &vers);
+}
+
+static int bam_hdr_write_common(BGZF *fp, const bam_hdr_t *h, int version)
 {
     char buf[4];
     int32_t i, name_len, x;
     // write "BAM1"
-    strncpy(buf, "BAM\1", 4);
+    strncpy(buf, version == 1 ? "BAM\1" : "BAM\2", 4);
     if (bgzf_write(fp, buf, 4) < 0) return -1;
     // write plain text and the number of reference sequences
     if (fp->is_be) {
@@ -251,6 +274,7 @@ int bam_hdr_write(BGZF *fp, const bam_hdr_t *h)
     // write sequence names and lengths
     for (i = 0; i != h->n_targets; ++i) {
         char *p = h->target_name[i];
+        const uint32_t zero = 0;
         name_len = strlen(p) + 1;
         if (fp->is_be) {
             x = ed_swap_4(name_len);
@@ -265,9 +289,16 @@ int bam_hdr_write(BGZF *fp, const bam_hdr_t *h)
         } else {
             if (bgzf_write(fp, &h->target_len[i], 4) < 0) return -1;
         }
+        if (version == 2) {
+            if (bgzf_write(fp, &zero, 4) < 0) return -1;
+        }
     }
     if (bgzf_flush(fp) < 0) return -1;
     return 0;
+}
+
+int bam_hdr_write(BGZF *fp, const bam_hdr_t *h) {
+    return bam_hdr_write_common(fp, h, 1);
 }
 
 int bam_name2id(bam_hdr_t *h, const char *ref)
@@ -377,7 +408,117 @@ static void swap_data(const bam1_core_t *c, int l_data, uint8_t *data, int is_ho
     for (i = 0; i < c->n_cigar; ++i) ed_swap_4p(&cigar[i]);
 }
 
-int bam_read1(BGZF *fp, bam1_t *b)
+static int bam_read1_common(BGZF *fp, bam1_t *b, int version) {
+    enum {
+        block_size = 0, ref_id, pos, l_read_name, mapq, bin, n_cigar, flag,
+        l_seq, next_ref, next_pos, tlen, core_end
+    };
+    const uint32_t offsets[2][13] = {
+        { 0, 4, 8, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36 },
+        { 0, 4, 8, 16, 17,  0, 20, 18, 24, 28, 32, 40, 48 }
+    };
+    bam1_core_t *c = &b->core;
+    uint8_t buf[offsets[1][core_end]];
+    uint32_t block_len;
+    int64_t p;
+    ssize_t ret;
+    int i;
+    char *field;
+
+    if (version < 1 || version > 2) {
+        hts_log_error("Invalid version");
+        return -2;
+    }
+    version--;
+
+    ret = bgzf_read(fp, buf, offsets[version][core_end]);
+    if (ret == 0) return -1;  // end of file
+    if (ret != offsets[version][core_end]) return -2; // truncated
+    block_len = le_to_u32(buf + offsets[version][block_size]);
+    c->tid = le_to_i32(buf + offsets[version][ref_id]);
+    c->qual = buf[offsets[version][mapq]];
+    c->l_qname = buf[offsets[version][l_read_name]];
+    c->l_extranul = (c->l_qname%4 != 0)? (4 - c->l_qname%4) : 0;
+    if ((uint32_t) c->l_qname + c->l_extranul > 255) // l_qname would overflow
+        return -4;
+    c->flag = le_to_u16(buf + offsets[version][flag]);
+    c->l_qseq = le_to_i32(buf + offsets[version][l_seq]);
+    c->mtid = le_to_i32(buf + offsets[version][next_ref]);
+    if (version == 0) {
+        c->n_cigar = le_to_u16(buf + offsets[version][n_cigar]);
+        c->bin = le_to_u16(buf + offsets[version][bin]);
+        c->pos = le_to_i32(buf + offsets[version][pos]);
+        c->mpos = le_to_i32(buf + offsets[version][next_pos]);
+        c->isize = le_to_i32(buf + offsets[version][tlen]);
+    } else {
+        c->n_cigar = le_to_u32(buf + offsets[version][n_cigar]);
+        p = le_to_i64(buf + offsets[version][pos]);
+        if (p < -1 || p > INT32_MAX) { field = "position"; goto erange; }
+        c->pos = p;
+        p = le_to_i64(buf + offsets[version][next_pos]);
+        if (p < -1 || p > INT32_MAX) { field = "mate position"; goto erange; }
+        c->mpos = p;
+        p = le_to_i64(buf + offsets[version][tlen]);
+        if (p < INT32_MIN || p > INT32_MAX) { field = "tlen"; goto erange; }
+        c->isize = p;
+    }
+    if (c->n_cigar > (UINT32_MAX >> 2)) { field = "n_cigar"; goto erange; }
+    b->l_data = block_len - 32 + c->l_extranul;
+    if (b->l_data < 0 || c->l_qseq < 0 || c->l_qname < 1) return -4;
+    if (((uint64_t) c->n_cigar << 2) + c->l_qname + c->l_extranul
+        + (((uint64_t) c->l_qseq + 1) >> 1) + c->l_qseq > (uint64_t) b->l_data)
+        return -4;
+    if (b->m_data < b->l_data) {
+        uint8_t *new_data;
+        uint32_t new_m = b->l_data;
+        kroundup32(new_m);
+        new_data = (uint8_t*)realloc(b->data, new_m);
+        if (!new_data)
+            return -4;
+        b->data = new_data;
+        b->m_data = new_m;
+    }
+    if (version == 0) {
+        if (bgzf_read(fp, b->data, c->l_qname) != c->l_qname) return -4;
+        for (i = 0; i < c->l_extranul; ++i) b->data[c->l_qname+i] = '\0';
+        c->l_qname += c->l_extranul;
+        if (b->l_data < c->l_qname ||
+            bgzf_read(fp, b->data + c->l_qname, b->l_data - c->l_qname) != b->l_data - c->l_qname)
+            return -4;
+        if (fp->is_be) swap_data(c, b->l_data, b->data, 0);
+    } else {
+        size_t cig_len = c->n_cigar << 2;
+        size_t aux_len = b->l_data - c->l_qname - c->l_extranul - cig_len;
+        if (bgzf_read(fp, b->data + c->l_qname + c->l_extranul, cig_len) != cig_len) {
+            return -4;
+        }
+        if (bgzf_read(fp, b->data, c->l_qname) != c->l_qname) return -4;
+        for (i = 0; i < c->l_extranul; ++i) b->data[c->l_qname+i] = '\0';
+        c->l_qname += c->l_extranul;
+        if (b->l_data < cig_len + c->l_qname) return -4;
+        if (bgzf_read(fp, b->data + c->l_qname + cig_len, aux_len) != aux_len)
+            return -4;
+    }
+
+    // Sanity check for broken CIGAR alignments
+    if (c->n_cigar > 0 && c->l_qseq > 0 && !(c->flag & BAM_FUNMAP)
+        && bam_cigar2qlen(c->n_cigar, bam_get_cigar(b)) != c->l_qseq) {
+        hts_log_error("CIGAR and query sequence lengths differ for %s",
+                      bam_get_qname(b));
+        return -4;
+    }
+    return 4 + block_len;
+
+ erange:
+    hts_log_error("%s outside range allowed by this version", field);
+    return -2;
+}
+
+int bam_read1(BGZF *fp, bam1_t *b) {
+    return bam_read1_common(fp, b, 1);
+}
+
+int bam_read1_legacy(BGZF *fp, bam1_t *b)
 {
     bam1_core_t *c = &b->core;
     int32_t block_len, ret, i;
@@ -467,6 +608,34 @@ int bam_write1(BGZF *fp, const bam1_t *b)
     return ok? 4 + block_len : -1;
 }
 
+int bam2_write1(BGZF *fp, const bam1_t *b) {
+    const bam1_core_t *c = &b->core;
+    uint8_t buf[48], *ub = buf;
+    uint32_t block_len = b->l_data - c->l_extranul + 32;
+    int ok;
+
+    u32_to_le(block_len, ub); ub += 4;
+    i32_to_le(c->tid, ub); ub += 4;
+    i64_to_le(c->pos, ub); ub += 8;
+    *ub++ = c->l_qname - c->l_extranul;
+    *ub++ = c->qual;
+    u16_to_le(c->flag, ub); ub += 2;
+    u32_to_le(c->n_cigar, ub); ub += 4;
+    u32_to_le(c->l_qseq, ub); ub += 4;
+    i32_to_le(c->mtid, ub); ub += 4;
+    i64_to_le(c->mpos, ub); ub += 8;
+    i64_to_le(c->isize, ub); ub += 8;
+    if (bgzf_flush_try(fp, 4 + block_len) < 0) return -1;
+    if (bgzf_write(fp, buf, sizeof(buf)) < 0) return -1;
+    if (fp->is_be) swap_data(c, b->l_data, b->data, 1);
+    ok = (bgzf_write(fp, b->data + c->l_qname, c->n_cigar << 2) >= 0);
+    if (ok) ok = (bgzf_write(fp, b->data, c->l_qname - c->l_extranul) >= 0);
+    if (ok) ok = (bgzf_write(fp, b->data + c->l_qname + (c->n_cigar << 2),
+                             b->l_data - c->l_qname - (c->n_cigar << 2)) >= 0);
+    if (fp->is_be) swap_data(c, b->l_data, b->data, 1);
+    return ok ? 4 + block_len : -1;
+}
+
 /********************
  *** BAM indexing ***
  ********************/
@@ -477,7 +646,8 @@ static hts_idx_t *bam_index(BGZF *fp, int min_shift)
     bam1_t *b;
     hts_idx_t *idx;
     bam_hdr_t *h;
-    h = bam_hdr_read(fp);
+    int bam_version = 0;
+    h = bam_hdr_read_common(fp, &bam_version);
     if (h == NULL) return NULL;
     if (min_shift > 0) {
         int64_t max_len = 0, s;
@@ -490,7 +660,7 @@ static hts_idx_t *bam_index(BGZF *fp, int min_shift)
     idx = hts_idx_init(h->n_targets, fmt, bgzf_tell(fp), min_shift, n_lvls);
     bam_hdr_destroy(h);
     b = bam_init1();
-    while ((ret = bam_read1(fp, b)) >= 0) {
+    while ((ret = bam_read1_common(fp, b, bam_version)) >= 0) {
         ret = hts_idx_push(idx, b->core.tid, b->core.pos, bam_endpos(b), bgzf_tell(fp), !(b->core.flag&BAM_FUNMAP));
         if (ret < 0) goto err; // unsorted
     }
@@ -557,11 +727,13 @@ int bam_index_build(const char *fn, int min_shift)
     return sam_index_build2(fn, NULL, min_shift);
 }
 
-static int bam_readrec(BGZF *fp, void *ignored, void *bv, int *tid, int *beg, int *end)
+static int bam_readrec(BGZF *fp, void *fpv, void *bv, int *tid, int *beg, int *end)
 {
     bam1_t *b = bv;
+    htsFile *hfp = (htsFile *) fpv;
     int ret;
-    if ((ret = bam_read1(fp, b)) >= 0) {
+    int vers = (hfp && hfp->format.format == hts_bam2) ? 2 : 1;
+    if ((ret = bam_read1_common(fp, b, vers)) >= 0) {
         *tid = b->core.tid;
         *beg = b->core.pos;
         *end = bam_endpos(b);
@@ -586,7 +758,8 @@ static int sam_bam_cram_readrec(BGZF *bgzfp, void *fpv, void *bv, int *tid, int 
     htsFile *fp = fpv;
     bam1_t *b = bv;
     switch (fp->format.format) {
-    case bam:   return bam_read1(bgzfp, b);
+    case bam:   return bam_read1_common(bgzfp, b, 1);
+    case hts_bam2: return bam_read1_common(bgzfp, b, 2);
     case cram: {
         int ret = cram_get_bam_seq(fp->fp.cram, &b);
         return ret >= 0
@@ -829,8 +1002,15 @@ static bam_hdr_t *sam_hdr_sanitise(bam_hdr_t *h) {
 bam_hdr_t *sam_hdr_read(htsFile *fp)
 {
     switch (fp->format.format) {
-    case bam:
-        return sam_hdr_sanitise(bam_hdr_read(fp->fp.bgzf));
+    case bam: {
+        int vers = 1;  // Force BAM1
+        return sam_hdr_sanitise(bam_hdr_read_common(fp->fp.bgzf, &vers));
+    }
+
+    case hts_bam2: {
+        int vers = 2; // Force BAM2
+        return sam_hdr_sanitise(bam_hdr_read_common(fp->fp.bgzf, &vers));
+    }
 
     case cram:
         return sam_hdr_sanitise(cram_header_to_bam(fp->fp.cram->header));
@@ -893,7 +1073,11 @@ int sam_hdr_write(htsFile *fp, const bam_hdr_t *h)
         fp->format.format = bam;
         /* fall-through */
     case bam:
-        if (bam_hdr_write(fp->fp.bgzf, h) < 0) return -1;
+        if (bam_hdr_write_common(fp->fp.bgzf, h, 1) < 0) return -1;
+        break;
+
+    case hts_bam2:
+        if (bam_hdr_write_common(fp->fp.bgzf, h, 2) < 0) return -1;
         break;
 
     case cram: {
@@ -1177,7 +1361,7 @@ int sam_read1(htsFile *fp, bam_hdr_t *h, bam1_t *b)
 {
     switch (fp->format.format) {
     case bam: {
-        int r = bam_read1(fp->fp.bgzf, b);
+        int r = bam_read1_common(fp->fp.bgzf, b, 1);
         if (r >= 0) {
             if (b->core.tid  >= h->n_targets || b->core.tid  < -1 ||
                 b->core.mtid >= h->n_targets || b->core.mtid < -1)
@@ -1185,7 +1369,15 @@ int sam_read1(htsFile *fp, bam_hdr_t *h, bam1_t *b)
         }
         return r;
         }
-
+    case hts_bam2: {
+        int r = bam_read1_common(fp->fp.bgzf, b, 2);
+        if (r >= 0) {
+            if (b->core.tid  >= h->n_targets || b->core.tid  < -1 ||
+                b->core.mtid >= h->n_targets || b->core.mtid < -1)
+                return -3;
+        }
+        return r;
+    }
     case cram: {
         int ret = cram_get_bam_seq(fp->fp.cram, &b);
         return ret >= 0
@@ -1358,6 +1550,9 @@ int sam_write1(htsFile *fp, const bam_hdr_t *h, const bam1_t *b)
         /* fall-through */
     case bam:
         return bam_write1(fp->fp.bgzf, b);
+
+    case hts_bam2:
+        return bam2_write1(fp->fp.bgzf, b);
 
     case cram:
         return cram_put_bam_seq(fp->fp.cram, (bam1_t *)b);

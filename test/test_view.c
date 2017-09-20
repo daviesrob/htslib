@@ -45,6 +45,8 @@ enum test_op {
 int main(int argc, char *argv[])
 {
     samFile *in;
+    htsFormat out_format = { unknown_category, unknown_format, { 0, 0 },
+                             no_compression, 0, NULL };
     char *fn_ref = 0;
     int flag = 0, c, clevel = -1, ignore_sam_err = 0;
     char moder[8];
@@ -59,7 +61,7 @@ int main(int argc, char *argv[])
     int benchmark = 0;
     int nthreads = 0; // shared pool
 
-    while ((c = getopt(argc, argv, "DSIt:i:bCl:o:N:BZ:@:")) >= 0) {
+    while ((c = getopt(argc, argv, "DSIt:i:bCl:o:O:N:BZ:@:")) >= 0) {
         switch (c) {
         case 'D': flag |= READ_CRAM; break;
         case 'S': flag |= READ_COMPRESSED; break;
@@ -70,6 +72,7 @@ int main(int argc, char *argv[])
         case 'C': flag |= WRITE_CRAM; break;
         case 'l': clevel = atoi(optarg); flag |= WRITE_COMPRESSED; break;
         case 'o': if (hts_opt_add(&out_opts, optarg)) return 1; break;
+        case 'O': if (hts_parse_format(&out_format, optarg)) return 1; break;
         case 'N': nreads = atoi(optarg); break;
         case 'B': benchmark = 1; break;
         case 'Z': extra_hdr_nuls = atoi(optarg); break;
@@ -89,6 +92,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "-C: write CRAM format (mode 'c')\n");
         fprintf(stderr, "-l 0-9: set zlib compression level\n");
         fprintf(stderr, "-o option=value: set an option for CRAM output\n");
+        fprintf(stderr, "-O <format>: set output format\n");
         fprintf(stderr, "-N: num_reads: limit the output to the first num_reads reads\n");
         fprintf(stderr, "\n");
         fprintf(stderr, "-B: enable benchmarking\n");
@@ -128,7 +132,11 @@ int main(int argc, char *argv[])
     if (clevel >= 0 && clevel <= 9) sprintf(modew + 1, "%d", clevel);
     if (flag & WRITE_CRAM) strcat(modew, "c");
     else if (flag & WRITE_COMPRESSED) strcat(modew, "b");
-    out = hts_open("-", modew);
+    if (out_format.format != unknown_format) {
+        out = hts_open_format("-", modew, &out_format);
+    } else {
+        out = hts_open("-", modew);
+    }
     if (out == NULL) {
         fprintf(stderr, "Error opening standard output\n");
         return EXIT_FAILURE;

@@ -91,6 +91,7 @@ static enum htsFormatCategory format_category(enum htsExactFormat fmt)
 {
     switch (fmt) {
     case bam:
+    case hts_bam2:
     case sam:
     case cram:
         return sequence_data;
@@ -232,6 +233,13 @@ int hts_detect_format(hFILE *hfile, htsFormat *fmt)
             fmt->version.major = 1, fmt->version.minor = -1;
             return 0;
         }
+        else if (memcmp(s, "BAM\2", 4) == 0) {
+            fmt->category = sequence_data;
+            fmt->format = hts_bam2;
+            // TODO Decompress enough to pick version from @HD-VN header
+            fmt->version.major = 1, fmt->version.minor = -1;
+            return 0;
+        }
         else if (memcmp(s, "BAI\1", 4) == 0) {
             fmt->category = index_file;
             fmt->format = bai;
@@ -319,6 +327,7 @@ char *hts_format_description(const htsFormat *format)
     switch (format->format) {
     case sam:   kputs("SAM", &str); break;
     case bam:   kputs("BAM", &str); break;
+    case hts_bam2: kputs("BAM2", &str); break;
     case cram:  kputs("CRAM", &str); break;
     case vcf:   kputs("VCF", &str); break;
     case bcf:
@@ -348,6 +357,7 @@ char *hts_format_description(const htsFormat *format)
     case bgzf:
         switch (format->format) {
         case bam:
+        case hts_bam2:
         case bcf:
         case csi:
         case tbi:
@@ -418,13 +428,28 @@ htsFile *hts_open_format(const char *fn, const char *mode, const htsFormat *fmt)
 
     // Set or reset the format code if opts->format is used
     if (fmt && fmt->format != unknown_format)
-        *mode_c = "\0g\0\0b\0c\0\0b\0g\0\0"[fmt->format];
+        *mode_c = "\0g\0\0b\0c\0\0b\0g\0\0\0b"[fmt->format];
 
     hfile = hopen(fn, smode);
     if (hfile == NULL) goto error;
 
     fp = hts_hopen(hfile, fn, smode);
     if (fp == NULL) goto error;
+
+    if (fmt) {
+        switch (fmt->format) {
+        case bam:
+            fp->format.category = sequence_data;
+            fp->format.format = bam;
+            break;
+        case hts_bam2:
+            fp->format.category = sequence_data;
+            fp->format.format = hts_bam2;
+            break;
+        default:
+            break;
+        }
+    }
 
     if (fmt && fmt->specific)
         if (hts_opt_apply(fp, fmt->specific) != 0)
@@ -720,6 +745,11 @@ int hts_parse_format(htsFormat *format, const char *str) {
         format->format            = bam;
         format->compression       = bgzf;
         format->compression_level = -1;
+    } else if (strcmp(fmt, "bam2") == 0) {
+        format->category          = sequence_data;
+        format->format            = hts_bam2;
+        format->compression       = bgzf;
+        format->compression_level = -1;
     } else if (strcmp(fmt, "cram") == 0) {
         format->category          = sequence_data;
         format->format            = cram;
@@ -839,6 +869,7 @@ htsFile *hts_hopen(hFILE *hfile, const char *fn, const char *mode)
     switch (fp->format.format) {
     case binary_format:
     case bam:
+    case hts_bam2:
     case bcf:
         fp->fp.bgzf = bgzf_hopen(hfile, simple_mode);
         if (fp->fp.bgzf == NULL) goto error;
@@ -900,6 +931,7 @@ int hts_close(htsFile *fp)
     switch (fp->format.format) {
     case binary_format:
     case bam:
+    case hts_bam2:
     case bcf:
         ret = bgzf_close(fp->fp.bgzf);
         break;
@@ -953,6 +985,7 @@ const char *hts_format_file_extension(const htsFormat *format) {
     switch (format->format) {
     case sam:  return "sam";
     case bam:  return "bam";
+    case hts_bam2: return "bam";
     case bai:  return "bai";
     case cram: return "cram";
     case crai: return "crai";
@@ -970,6 +1003,7 @@ static hFILE *hts_hfile(htsFile *fp) {
     switch (fp->format.format) {
     case binary_format: // fall through; still valid if bcf?
     case bam:          return bgzf_hfile(fp->fp.bgzf);
+    case hts_bam2:     return bgzf_hfile(fp->fp.bgzf);
     case cram:         return cram_hfile(fp->fp.cram);
     case text_format:  return fp->fp.hfile;
     case sam:          return fp->fp.hfile;
