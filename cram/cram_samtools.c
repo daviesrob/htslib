@@ -129,12 +129,16 @@ int bam_construct_seq(bam_seq_t **bp, size_t extra_len,
 
 bam_hdr_t *cram_header_to_bam(SAM_hdr *h) {
     int i;
+    if (!h)
+        return NULL;
     bam_hdr_t *header = bam_hdr_init();
+    if (!header)
+        return NULL;
 
-    header->l_text = ks_len(&h->text);
-    header->text = malloc(header->l_text+1);
-    memcpy(header->text, ks_str(&h->text), header->l_text);
-    header->text[header->l_text] = 0;
+    if (sam_hdr_parse2(header, ks_str(&h->text), ks_len(&h->text)) != 0) {
+        bam_hdr_destroy(header);
+        return NULL;
+    }
 
     header->n_targets = h->nref;
     header->target_name = (char **)calloc(header->n_targets,

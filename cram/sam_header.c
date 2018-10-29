@@ -340,6 +340,11 @@ int sam_hdr_add_lines(SAM_hdr *sh, const char *lines, int len) {
     if (!len)
         len = strlen(lines);
 
+    /* empty headers are allowed */
+    if (!lines[0]) {
+        kputsn("", 0, &sh->text);
+    }
+
     hdr = string_alloc(sh->str_pool, len+1);
     if (!hdr)
         return -1;

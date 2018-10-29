@@ -35,6 +35,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include "cram/cram.h"
 #include "htslib/sam.h"
 #include "htslib/vcf.h"
+#include "header.h"
 
 struct opts {
     char *fn_ref;
@@ -71,15 +72,16 @@ int sam_loop(int argc, char **argv, int optind, struct opts *opts, htsFile *in, 
         return EXIT_FAILURE;
     }
     h->ignore_sam_err = opts->ignore_sam_err;
-    if (opts->extra_hdr_nuls) {
-        char *new_text = realloc(h->text, h->l_text + opts->extra_hdr_nuls);
-        if (new_text == NULL) {
-            fprintf(stderr, "Error reallocing header text\n");
-            goto fail;
+    if (opts->extra_hdr_nuls > 0) {
+        size_t l = h->hdr->text.l;
+        if (ks_resize(&h->hdr->text, l + opts->extra_hdr_nuls) != 0) {
+            fprintf(stderr, "Couldn't expand header text");
+            return EXIT_FAILURE;
         }
-        h->text = new_text;
-        memset(&h->text[h->l_text], 0, opts->extra_hdr_nuls);
-        h->l_text += opts->extra_hdr_nuls;
+        memset(h->hdr->text.s + l, 0, opts->extra_hdr_nuls);
+        h->hdr->text.l += opts->extra_hdr_nuls;
+        h->text = ks_str(&h->hdr->text);
+        h->l_text = ks_len(&h->hdr->text);
     }
 
     b = bam_init1();

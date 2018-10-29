@@ -142,6 +142,7 @@ LIBHTS_OBJS = \
 	bgzf.o \
 	errmod.o \
 	faidx.o \
+	header.o \
 	hfile.o \
 	hfile_net.o \
 	hts.o \
@@ -304,6 +305,7 @@ bgzf.o bgzf.pico: bgzf.c config.h $(htslib_hts_h) $(htslib_bgzf_h) $(htslib_hfil
 errmod.o errmod.pico: errmod.c config.h $(htslib_hts_h) $(htslib_ksort_h) $(htslib_hts_os_h)
 kstring.o kstring.pico: kstring.c config.h $(htslib_kstring_h)
 knetfile.o knetfile.pico: knetfile.c config.h $(htslib_hts_log_h) $(htslib_knetfile_h)
+header.o header.pico: header.c config.h $(htslib_khash_h) $(htslib_kstring_h)
 hfile.o hfile.pico: hfile.c config.h $(htslib_hfile_h) $(hfile_internal_h) $(htslib_kstring_h) $(hts_internal_h) $(htslib_khash_h)
 hfile_gcs.o hfile_gcs.pico: hfile_gcs.c config.h $(htslib_hts_h) $(htslib_kstring_h) $(hfile_internal_h)
 hfile_libcurl.o hfile_libcurl.pico: hfile_libcurl.c config.h $(hfile_internal_h) $(htslib_hts_h) $(htslib_kstring_h) $(htslib_khash_h)

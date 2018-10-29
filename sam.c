@@ -38,6 +38,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include "hts_internal.h"
 #include "htslib/hfile.h"
 #include "htslib/hts_endian.h"
+#include "header.h"
 
 #include "htslib/khash.h"
 KHASH_DECLARE(s2i, kh_cstr_t, int64_t)
@@ -54,29 +55,35 @@ typedef khash_t(s2i) sdict_t;
 
 bam_hdr_t *bam_hdr_init()
 {
-    return (bam_hdr_t*)calloc(1, sizeof(bam_hdr_t));
+    bam_hdr_t *bh = (bam_hdr_t*)calloc(1, sizeof(bam_hdr_t));
+    if (bh)
+        bh->hdr = sam_hdr_new2();
+
+    return bh;
 }
 
-void bam_hdr_destroy(bam_hdr_t *h)
+void bam_hdr_destroy(bam_hdr_t *bh)
 {
     int32_t i;
-    if (h == NULL) return;
-    if (h->ref_count > 0) {
-        --h->ref_count;
+
+    if (bh == NULL) return;
+    if (bh->ref_count > 0) {
+        --bh->ref_count;
         return;
     }
-    if (h->target_name) {
-        for (i = 0; i < h->n_targets; ++i)
-            free(h->target_name[i]);
-        free(h->target_name);
-        free(h->target_len);
+    if (bh->target_name) {
+        for (i = 0; i < bh->n_targets; ++i)
+            free(bh->target_name[i]);
+        free(bh->target_name);
+        free(bh->target_len);
     }
-    free(h->text); free(h->cigar_tab);
-    if (h->sdict) kh_destroy(s2i, (sdict_t*)h->sdict);
-    free(h);
+    free(bh->cigar_tab);
+    if (bh->sdict) kh_destroy(s2i, (sdict_t*)bh->sdict);
+    if (bh->hdr) sam_hdr_free2(bh->hdr);
+    free(bh);
 }
 
-bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
+bam_hdr_t *bam_hdr_dup(bam_hdr_t *h0)
 {
     if (h0 == NULL) return NULL;
     bam_hdr_t *h;
@@ -88,9 +95,7 @@ bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
     // Then the pointery stuff
     h->cigar_tab = NULL;
     h->sdict = NULL;
-    // TODO Check for memory allocation failures
-    h->text = (char*)calloc(h->l_text + 1, 1);
-    memcpy(h->text, h0->text, h->l_text);
+
     h->target_len = (uint32_t*)calloc(h->n_targets, sizeof(uint32_t));
     h->target_name = (char**)calloc(h->n_targets, sizeof(char*));
     int i;
@@ -98,11 +103,15 @@ bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
         h->target_len[i] = h0->target_len[i];
         h->target_name[i] = strdup(h0->target_name[i]);
     }
+    if (-1 == sam_hdr_parse2(h, sam_hdr_str2(h0), sam_hdr_length2(h0))) {
+        bam_hdr_destroy(h);
+        h = NULL;
+    }
     return h;
 }
 
 
-static bam_hdr_t *hdr_from_dict(sdict_t *d)
+static bam_hdr_t *sam_hdr_from_dict(sdict_t *d)
 {
     bam_hdr_t *h;
     khint_t k;
@@ -133,8 +142,8 @@ static bam_hdr_t *hdr_from_dict(sdict_t *d)
 bam_hdr_t *bam_hdr_read(BGZF *fp)
 {
     bam_hdr_t *h;
-    char buf[4];
-    int magic_len, has_EOF;
+    char buf[4], *h_buf;
+    int magic_len, has_EOF, h_len;
     int32_t i, name_len, num_names = 0;
     size_t bufsize;
     ssize_t bytes;
@@ -155,17 +164,19 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     if (!h) goto nomem;
 
     // read plain text and the number of reference sequences
-    bytes = bgzf_read(fp, &h->l_text, 4);
+    bytes = bgzf_read(fp, &h_len, 4);
     if (bytes != 4) goto read_err;
-    if (fp->is_be) ed_swap_4p(&h->l_text);
+    if (fp->is_be) ed_swap_4p(&h_len);
 
-    bufsize = ((size_t) h->l_text) + 1;
-    if (bufsize < h->l_text) goto nomem; // so large that adding 1 overflowed
-    h->text = (char*)malloc(bufsize);
-    if (!h->text) goto nomem;
-    h->text[h->l_text] = 0; // make sure it is NULL terminated
-    bytes = bgzf_read(fp, h->text, h->l_text);
-    if (bytes != h->l_text) goto read_err;
+    bufsize = ((size_t) h_len) + 1;
+    if (bufsize < h_len) goto nomem; // so large that adding 1 overflowed
+    h_buf = (char*)malloc(bufsize);
+    if (!h_buf) goto nomem;
+    h_buf[h_len] = 0; // make sure it is NULL terminated
+    bytes = bgzf_read(fp, h_buf, h_len);
+    if (bytes != h_len) goto read_err;
+    if (-1 == sam_hdr_parse2(h, h_buf, h_len)) goto clean;
+    free(h_buf);
 
     bytes = bgzf_read(fp, &h->n_targets, 4);
     if (bytes != 4) goto read_err;
@@ -238,9 +249,10 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     return NULL;
 }
 
-int bam_hdr_write(BGZF *fp, const bam_hdr_t *h)
+int bam_hdr_write(BGZF *fp, bam_hdr_t *h)
 {
     int32_t i, name_len, x;
+    if (-1 == sam_hdr_rebuild2(h)) return -1;
     // write "BAM1"
     if (bgzf_write(fp, "BAM\1", 4) < 0) return -1;
     // write plain text and the number of reference sequences
@@ -1019,11 +1031,10 @@ hts_itr_t *sam_itr_regions(const hts_idx_t *idx, bam_hdr_t *hdr, hts_reglist_t *
 #include "htslib/kseq.h"
 #include "htslib/kstring.h"
 
-bam_hdr_t *sam_hdr_parse(int l_text, const char *text)
+static sdict_t *sam_hdr_parse_dict(const char *text, int l_text)
 {
     const char *q, *r, *p;
     char *sn = NULL;
-    bam_hdr_t *header;
     khash_t(s2i) *d;
     d = kh_init(s2i);
     if (!d) return NULL;
@@ -1072,9 +1083,7 @@ bam_hdr_t *sam_hdr_parse(int l_text, const char *text)
         }
         while (*p != '\0' && *p != '\n') ++p;
     }
-    header = hdr_from_dict(d);
-    if (!header) goto fail;
-    return header;
+    return d;
 
  fail: {
         int save_errno = errno;
@@ -1145,20 +1154,12 @@ static bam_hdr_t *sam_hdr_sanitise(bam_hdr_t *h) {
             return NULL;
         }
 
-        if (i >= h->l_text - 1) {
-            cp = realloc(h->text, (size_t) h->l_text+2);
-            if (!cp) {
-                bam_hdr_destroy(h);
-                return NULL;
-            }
-            h->text = cp;
-        }
-        cp[i++] = '\n';
+        if (kputc('\n', &h->hdr->text) < 0)
+            return NULL;
 
-        // l_text may be larger already due to multiple nul padding
-        if (h->l_text < i)
-            h->l_text = i;
-        cp[h->l_text] = '\0';
+        /* Sync */
+        h->text = ks_str(&h->hdr->text);
+        h->l_text = ks_len(&h->hdr->text);
     }
 
     return h;
@@ -1222,16 +1223,20 @@ bam_hdr_t *sam_hdr_read(htsFile *fp)
             if (e) goto error;
         }
         if (str.l == 0) kputsn("", 0, &str);
-        h = sam_hdr_parse(str.l, str.s);
+        h = sam_hdr_from_dict(sam_hdr_parse_dict(str.s, str.l));
         if (!h) goto error;
-        h->l_text = str.l; h->text = str.s;
+        if (sam_hdr_parse2(h, str.s, str.l) != 0)
+            goto error;
+
+        KS_FREE(&str);
+
         fp->bam_header = sam_hdr_sanitise(h);
         fp->bam_header->ref_count = 1;
         return fp->bam_header;
 
      error:
         bam_hdr_destroy(h);
-        free(str.s);
+        KS_FREE(&str);
         return NULL;
         }
 
@@ -1240,12 +1245,18 @@ bam_hdr_t *sam_hdr_read(htsFile *fp)
     }
 }
 
-int sam_hdr_write(htsFile *fp, const bam_hdr_t *h)
+int sam_hdr_write(htsFile *fp, bam_hdr_t *h)
 {
     if (!fp || !h) {
         errno = EINVAL;
         return -1;
     }
+
+    if (-1 == sam_hdr_rebuild2(h))
+        return -1;
+
+    if (!h->text)
+        return 0;
 
     switch (fp->format.format) {
     case binary_format:
@@ -1258,7 +1269,7 @@ int sam_hdr_write(htsFile *fp, const bam_hdr_t *h)
 
     case cram: {
         cram_fd *fd = fp->fp.cram;
-        SAM_hdr *hdr = bam_header_to_cram((bam_hdr_t *)h);
+        SAM_hdr *hdr = bam_header_to_cram(h);
         if (! hdr) return -1;
         if (cram_set_header(fd, hdr) < 0) return -1;
         if (fp->fn_aux)
@@ -1309,7 +1320,7 @@ int sam_hdr_write(htsFile *fp, const bam_hdr_t *h)
     }
     return 0;
 }
-
+/*
 int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
 {
     char *p, *q, *beg = NULL, *end = NULL, *newtext;
@@ -1381,7 +1392,7 @@ int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
     h->text = newtext;
     return 0;
 }
-
+*/
 /**********************
  *** SAM record I/O ***
  **********************/

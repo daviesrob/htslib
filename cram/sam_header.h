@@ -363,9 +363,6 @@ SAM_hdr_tag *sam_hdr_find_key(SAM_hdr *sh,
                               char *key,
                               SAM_hdr_tag **prev);
 
-int sam_hdr_remove_key(SAM_hdr *sh,
-        SAM_hdr_type *type,
-        char *key);
 
 /*! Adds or updates tag key,value pairs in a header line.
  *
