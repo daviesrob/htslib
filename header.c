@@ -72,11 +72,11 @@ static int sam_hdr_init_type_order(sam_hdr_t *sh, char *type_list) {
  */
 static int sam_hdr_update_hashes2(sam_hdr_t *sh,
                                  int type,
-                                 sam_hdr_type2 *h_type) {
+                                 sam_hdr_type_t *h_type) {
     /* Add to reference hash? */
     if ((type>>8) == 'S' && (type&0xff) == 'Q') {
-        sam_hdr_tag2 *tag;
-        SAM_SQ2 *new_ref;
+        sam_hdr_tag_t *tag;
+        sam_hdr_sq_t *new_ref;
         int nref = sh->nref;
 
         new_ref = realloc(sh->ref, (sh->nref+1)*sizeof(*sh->ref));
@@ -115,8 +115,8 @@ static int sam_hdr_update_hashes2(sam_hdr_t *sh,
 
     /* Add to read-group hash? */
     if ((type>>8) == 'R' && (type&0xff) == 'G') {
-        sam_hdr_tag2 *tag;
-        SAM_RG2 *new_rg;
+        sam_hdr_tag_t *tag;
+        sam_hdr_rg_t *new_rg;
         int nrg = sh->nrg;
 
         new_rg = realloc(sh->rg, (sh->nrg+1)*sizeof(*sh->rg));
@@ -155,8 +155,8 @@ static int sam_hdr_update_hashes2(sam_hdr_t *sh,
 
     /* Add to program hash? */
     if ((type>>8) == 'P' && (type&0xff) == 'G') {
-        sam_hdr_tag2 *tag;
-        SAM_PG2 *new_pg;
+        sam_hdr_tag_t *tag;
+        sam_hdr_pg_t *new_pg;
         int npg = sh->npg;
 
         new_pg = realloc(sh->pg, (sh->npg+1)*sizeof(*sh->pg));
@@ -238,11 +238,11 @@ static int sam_hdr_update_hashes2(sam_hdr_t *sh,
     return 0;
 }
 
-static int sam_hdr_remove_hash_entry2(sam_hdr_t *sh, int type, sam_hdr_type2 *h_type) {
+static int sam_hdr_remove_hash_entry2(sam_hdr_t *sh, int type, sam_hdr_type_t *h_type) {
     if (!sh || !h_type)
         return -1;
 
-    sam_hdr_tag2 *tag;
+    sam_hdr_tag_t *tag;
     char *key = NULL;
     khint_t k;
 
@@ -257,7 +257,7 @@ static int sam_hdr_remove_hash_entry2(sam_hdr_t *sh, int type, sam_hdr_type2 *h_
                 k = kh_get(m_s2i2, sh->ref_hash, key);
                 if (k != kh_end(sh->ref_hash)) {
                     if (kh_val(sh->ref_hash, k) < sh->nref-1)
-                        memcpy(&sh->ref[kh_val(sh->ref_hash, k)], &sh->ref[kh_val(sh->ref_hash, k)+1], sizeof(SAM_SQ2)*(sh->nref - kh_val(sh->ref_hash, k) - 1));
+                        memcpy(&sh->ref[kh_val(sh->ref_hash, k)], &sh->ref[kh_val(sh->ref_hash, k)+1], sizeof(sam_hdr_sq_t)*(sh->nref - kh_val(sh->ref_hash, k) - 1));
                     kh_del(m_s2i2, sh->ref_hash, k);
                     sh->nref--;
                 }
@@ -278,7 +278,7 @@ static int sam_hdr_remove_hash_entry2(sam_hdr_t *sh, int type, sam_hdr_type2 *h_
                 k = kh_get(m_s2i2, sh->rg_hash, key);
                 if (k != kh_end(sh->rg_hash)) {
                     if (kh_val(sh->rg_hash, k) < sh->nrg-1)
-                        memcpy(&sh->rg[kh_val(sh->rg_hash, k)], &sh->rg[kh_val(sh->rg_hash, k)+1], sizeof(SAM_RG2)*(sh->nrg - kh_val(sh->rg_hash, k) - 1));
+                        memcpy(&sh->rg[kh_val(sh->rg_hash, k)], &sh->rg[kh_val(sh->rg_hash, k)+1], sizeof(sam_hdr_rg_t)*(sh->nrg - kh_val(sh->rg_hash, k) - 1));
                     kh_del(m_s2i2, sh->rg_hash, k);
                     sh->nrg--;
                 }
@@ -315,8 +315,8 @@ static int sam_hdr_remove_hash_entry2(sam_hdr_t *sh, int type, sam_hdr_type2 *h_
  */
 static int sam_hdr_vadd2(sam_hdr_t *sh, const char *type, va_list ap, ...) {
     va_list args;
-    sam_hdr_type2 *h_type;
-    sam_hdr_tag2 *h_tag, *last=NULL;
+    sam_hdr_type_t *h_type;
+    sam_hdr_tag_t *h_tag, *last=NULL;
     int new;
     khint32_t type_i = (type[0]<<8) | type[1], k;
 
@@ -327,7 +327,7 @@ static int sam_hdr_vadd2(sam_hdr_t *sh, const char *type, va_list ap, ...) {
 
     // Form the ring, either with self or other lines of this type
     if (!new) {
-        sam_hdr_type2 *t = kh_val(sh->h, k), *p;
+        sam_hdr_type_t *t = kh_val(sh->h, k), *p;
         p = t->prev;
 
         assert(p->next == t);
@@ -426,7 +426,7 @@ static int sam_hdr_vadd2(sam_hdr_t *sh, const char *type, va_list ap, ...) {
  * Function for deallocating a list of tags
  */
 
-static void sam_hdr_free_tags(sam_hdr_t *hdr, sam_hdr_tag2 *tag) {
+static void sam_hdr_free_tags(sam_hdr_t *hdr, sam_hdr_tag_t *tag) {
     if (!hdr || !tag)
         return;
     if (tag->next)
@@ -435,7 +435,7 @@ static void sam_hdr_free_tags(sam_hdr_t *hdr, sam_hdr_tag2 *tag) {
     pool_free(hdr->tag_pool, tag);
 }
 
-static int sam_hdr_remove_line(sam_hdr_t *hdr, const char *type_name, sam_hdr_type2 *type_found) {
+static int sam_hdr_remove_line(sam_hdr_t *hdr, const char *type_name, sam_hdr_type_t *type_found) {
     if (!hdr || !type_name || !type_found)
         return -1;
 
@@ -467,7 +467,7 @@ static int sam_hdr_remove_line(sam_hdr_t *hdr, const char *type_name, sam_hdr_ty
     return 0;
 }
 
-static int sam_hdr_rebuild_comms(const sam_hdr_type2 *t, kstring_t *ks) {
+static int sam_hdr_rebuild_comms(const sam_hdr_type_t *t, kstring_t *ks) {
     if (!t->comm) {
         if (EOF == kputsn_("@CO\t", 4, ks))
             return -1;
@@ -492,11 +492,11 @@ static int sam_hdr_rebuild_comms(const sam_hdr_type2 *t, kstring_t *ks) {
 }
 
 static int sam_hdr_rebuild_lines(const sam_hdr_t *hdr, khint_t k, kstring_t *ks) {
-    const sam_hdr_type2 *t1, *t2;
+    const sam_hdr_type_t *t1, *t2;
 
     t1 = t2 = kh_val(hdr->h, k);
     do {
-        sam_hdr_tag2 *tag;
+        sam_hdr_tag_t *tag;
         char c[2];
 
         if (t1->skip) {
@@ -533,7 +533,7 @@ static int sam_hdr_rebuild_lines(const sam_hdr_t *hdr, khint_t k, kstring_t *ks)
 static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
     int i, lno;
     char *hdr;
-    sam_hdr_type2 *last_comm = NULL;
+    sam_hdr_type_t *last_comm = NULL;
 
     if (len > SSIZE_MAX)
         return -1;
@@ -555,8 +555,8 @@ static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
         khint_t k;
 
         int l_start = i, new;
-        sam_hdr_type2 *h_type;
-        sam_hdr_tag2 *h_tag, *last;
+        sam_hdr_type_t *h_type;
+        sam_hdr_tag_t *h_tag, *last;
 
         if (hdr[i] != '@') {
             int j;
@@ -586,7 +586,7 @@ static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
 
         // Form the ring, either with self or other lines of this type
         if (!new) {
-            sam_hdr_type2 *t = kh_val(sh->h, k), *p;
+            sam_hdr_type_t *t = kh_val(sh->h, k), *p;
             p = t->prev;
 
             assert(p->next == t);
@@ -839,14 +839,15 @@ char *sam_hdr_find_line2(bam_hdr_t *bh, const char *type,
         sh = bh->hdr;
     }
 
-    sam_hdr_type2 *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
-    kstring_t ks = KS_INITIALIZER;
-    sam_hdr_tag2 *tag;
-    int r = 0;
-
-    if (!ty)
+    sam_hdr_type_t *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    if (!ty) {
+        hts_log_warning("Could not find type '%s'", type);
         return NULL;
+    }
 
+    kstring_t ks = KS_INITIALIZER;
+    sam_hdr_tag_t *tag;
+    int r = 0;
     // Paste together the line from the hashed copy
     r |= (kputc_('@', &ks) == EOF);
     r |= (kputs(type, &ks) == EOF);
@@ -866,6 +867,9 @@ char *sam_hdr_find_line2(bam_hdr_t *bh, const char *type,
 /*
  * Remove a line from the header by specifying a tag:value that uniquely
  * identifies a line, i.e. the @SQ line containing "SN:ref1".
+ * @SQ line is uniquely identified by SN tag.
+ * @RG line is uniquely identified by ID tag.
+ * @PG line is uniquely identified by ID tag.
  *
  * Returns 0 on success and -1 on error
  */
@@ -886,7 +890,7 @@ int sam_hdr_remove_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key
         return -1;
     }
 
-    sam_hdr_type2 *type_found = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    sam_hdr_type_t *type_found = sam_hdr_find_type2(sh, type, ID_key, ID_value);
     if (!type_found)
         return 0;
 
@@ -920,7 +924,7 @@ int sam_hdr_remove_line_pos2(bam_hdr_t *bh, const char *type, int position) {
         return -1;
     }
 
-    sam_hdr_type2 *type_beg, *type_end, *type_found = NULL;
+    sam_hdr_type_t *type_beg, *type_end, *type_found = NULL;
     int itype = (type[0]<<8) | type[1];
 
     khint_t k = kh_get(sam_hdr_t, sh->h, itype);
@@ -945,7 +949,7 @@ int sam_hdr_remove_line_pos2(bam_hdr_t *bh, const char *type, int position) {
     return ret;
 }
 
-int sam_hdr_leave_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
+int sam_hdr_keep_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
     sam_hdr_t *sh;
     if (!bh || !type)
         return -1;
@@ -956,16 +960,16 @@ int sam_hdr_leave_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key,
         sh = bh->hdr;
     }
 
-    if (!strncmp(type, "PG", 2)) {
-        hts_log_warning("Removing PG lines is not supported!");
+    if (!strncmp(type, "PG", 2) || !strncmp(type, "CO", 2)) {
+        hts_log_warning("Removing PG or CO lines is not supported!");
         return -1;
     }
 
-    sam_hdr_type2 *type_found = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    sam_hdr_type_t *type_found = sam_hdr_find_type2(sh, type, ID_key, ID_value);
     if (!type_found)
         return 0;
 
-    sam_hdr_type2 *step = type_found->next;
+    sam_hdr_type_t *step = type_found->next;
     int ret;
     while (step != type_found) {
         ret = sam_hdr_remove_line(sh, type, step);
@@ -992,11 +996,11 @@ const char *sam_hdr_find_tag2(bam_hdr_t *bh,
         sh = bh->hdr;
     }
 
-    sam_hdr_type2 *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    sam_hdr_type_t *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
     if (!ty)
         return NULL;
 
-    sam_hdr_tag2 *tg = sam_hdr_find_key2(ty, key, NULL);
+    sam_hdr_tag_t *tg = sam_hdr_find_key2(ty, key, NULL);
     if (!tg)
         return NULL;
 
@@ -1018,7 +1022,7 @@ int sam_hdr_remove_tag2(bam_hdr_t *bh,
         sh = bh->hdr;
     }
 
-    sam_hdr_type2 *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    sam_hdr_type_t *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
     if (!ty)
         return -1;
 
@@ -1042,7 +1046,7 @@ int sam_hdr_find_update2(bam_hdr_t *bh, const char *type,
     }
 
     int ret;
-    sam_hdr_type2 *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    sam_hdr_type_t *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
     if (!ty)
         return -1;
 
@@ -1197,7 +1201,7 @@ int sam_hdr_link_pg2(bam_hdr_t *bh) {
 
     for (i = 0; i < sh->npg; i++) {
         khint_t k;
-        sam_hdr_tag2 *tag;
+        sam_hdr_tag_t *tag;
         char tmp;
 
         for (tag = sh->pg[i].tag; tag; tag = tag->next) {
@@ -1371,10 +1375,10 @@ sam_hdr_t *sam_hdr_new2() {
     if (!(sh->pg_hash = kh_init(m_s2i2)))
         goto err;
 
-    if (!(sh->tag_pool = pool_create(sizeof(sam_hdr_tag2))))
+    if (!(sh->tag_pool = pool_create(sizeof(sam_hdr_tag_t))))
         goto err;
 
-    if (!(sh->type_pool = pool_create(sizeof(sam_hdr_type2))))
+    if (!(sh->type_pool = pool_create(sizeof(sam_hdr_type_t))))
         goto err;
 
     if (!(sh->str_pool = string_pool_create(8192)))
@@ -1472,11 +1476,11 @@ void sam_hdr_free2(sam_hdr_t *hdr) {
  *
  * Returns NULL if no type/ID is found
  */
-sam_hdr_type2 *sam_hdr_find_type2(sam_hdr_t *sh, const char *type,
+sam_hdr_type_t *sam_hdr_find_type2(sam_hdr_t *sh, const char *type,
                           const char *ID_key, const char *ID_value) {
     if (!sh || !type)
         return NULL;
-    sam_hdr_type2 *t1, *t2;
+    sam_hdr_type_t *t1, *t2;
     int itype = (type[0]<<8)|(type[1]);
     khint_t k;
 
@@ -1516,7 +1520,7 @@ sam_hdr_type2 *sam_hdr_find_type2(sam_hdr_t *sh, const char *type,
 
     t1 = t2 = kh_val(sh->h, k);
     do {
-        sam_hdr_tag2 *tag;
+        sam_hdr_tag_t *tag;
         for (tag = t1->tag; tag; tag = tag->next) {
             if (tag->str[0] == ID_key[0] && tag->str[1] == ID_key[1]) {
                 char *cp1 = tag->str+3;
@@ -1544,13 +1548,13 @@ sam_hdr_type2 *sam_hdr_find_type2(sam_hdr_t *sh, const char *type,
  * Returns 0 on success
  *        -1 on failure
  */
-int sam_hdr_update2(sam_hdr_t *sh, sam_hdr_type2 *type, va_list ap) {
+int sam_hdr_update2(sam_hdr_t *sh, sam_hdr_type_t *type, va_list ap) {
     if (!sh)
         return -1;
 
     for (;;) {
         char *k, *v;
-        sam_hdr_tag2 *tag, *prev = NULL;
+        sam_hdr_tag_t *tag, *prev = NULL;
 
         if (!(k = (char *)va_arg(ap, char *)))
             break;
@@ -1593,10 +1597,10 @@ int sam_hdr_update2(sam_hdr_t *sh, sam_hdr_type2 *type, va_list ap) {
  * Returns the tag pointer on success
  *         NULL on failure
  */
-sam_hdr_tag2 *sam_hdr_find_key2(sam_hdr_type2 *type,
+sam_hdr_tag_t *sam_hdr_find_key2(sam_hdr_type_t *type,
                               const char *key,
-                              sam_hdr_tag2 **prev) {
-    sam_hdr_tag2 *tag, *p = NULL;
+                              sam_hdr_tag_t **prev) {
+    sam_hdr_tag_t *tag, *p = NULL;
     if (!type)
         return NULL;
 
@@ -1615,9 +1619,9 @@ sam_hdr_tag2 *sam_hdr_find_key2(sam_hdr_type2 *type,
 }
 
 int sam_hdr_remove_key2(sam_hdr_t *sh,
-                       sam_hdr_type2 *type,
+                       sam_hdr_type_t *type,
                        const char *key) {
-    sam_hdr_tag2 *tag, *prev;
+    sam_hdr_tag_t *tag, *prev;
     if (!sh)
         return -1;
     tag = sam_hdr_find_key2(type, key, &prev);
@@ -1641,7 +1645,7 @@ int sam_hdr_remove_key2(sam_hdr_t *sh,
  *
  * Returns NULL on failure
  */
-SAM_RG2 *sam_hdr_find_rg2(sam_hdr_t *hdr, const char *rg) {
+sam_hdr_rg_t *sam_hdr_find_rg2(sam_hdr_t *hdr, const char *rg) {
     khint_t k = kh_get(m_s2i2, hdr->rg_hash, rg);
     return k == kh_end(hdr->rg_hash)
         ? NULL
@@ -1683,8 +1687,8 @@ enum sam_sort_order2 sam_hdr_sort_order2(sam_hdr_t *hdr) {
     so = ORDER_UNKNOWN2;
     k = kh_get(sam_hdr_t, hdr->h, K("HD"));
     if (k != kh_end(hdr->h)) {
-        sam_hdr_type2 *ty = kh_val(hdr->h, k);
-        sam_hdr_tag2 *tag;
+        sam_hdr_type_t *ty = kh_val(hdr->h, k);
+        sam_hdr_tag_t *tag;
         for (tag = ty->tag; tag; tag = tag->next) {
             if (tag->str[0] == 'S' && tag->str[1] == 'O') {
                 if (strcmp(tag->str+3, "unsorted") == 0)
@@ -1709,8 +1713,8 @@ enum sam_group_order2 sam_hdr_group_order2(sam_hdr_t *hdr) {
     go = ORDER_NONE2;
     k = kh_get(sam_hdr_t, hdr->h, K("HD"));
     if (k != kh_end(hdr->h)) {
-        sam_hdr_type2 *ty = kh_val(hdr->h, k);
-        sam_hdr_tag2 *tag;
+        sam_hdr_type_t *ty = kh_val(hdr->h, k);
+        sam_hdr_tag_t *tag;
         for (tag = ty->tag; tag; tag = tag->next) {
             if (tag->str[0] == 'G' && tag->str[1] == 'O') {
                 if (strcmp(tag->str+3, "query") == 0)

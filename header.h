@@ -62,7 +62,7 @@ extern "C" {
 #define KS_INIT(ks) ((ks)->l = 0, (ks)->m = 0, (ks)->s = NULL)
 
 // Frees the string subfield only. Assumes 's' itself is static.
-#define KS_FREE(ks) do { if ((ks)->s) free((ks)->s); } while(0)
+#define KS_FREE(ks) do { if ((ks)->s) {free((ks)->s); (ks)->s = NULL;} } while(0)
 
 #define K(a) (((a)[0]<<8)|((a)[1]))
 
@@ -104,7 +104,7 @@ typedef struct sam_hdr_tag_s {
     struct sam_hdr_tag_s *next;
     char *str;
     int   len;
-} sam_hdr_tag2;
+} sam_hdr_tag_t;
 
 /*! The parsed version of the SAM header string.
  *
@@ -124,39 +124,39 @@ typedef struct sam_hdr_tag_s {
 typedef struct sam_hdr_type_s {
     struct sam_hdr_type_s *next; // circular
     struct sam_hdr_type_s *prev;
-    sam_hdr_tag2 *tag;            // first tag
+    sam_hdr_tag_t *tag;          // first tag
     int order;                   // 0 upwards
     int skip;                    // 1 - don't add this line to the header text together with all the others from the same type.
                                  // Useful for comments.
     struct sam_hdr_type_s *comm; // attached comment line
-} sam_hdr_type2;
+} sam_hdr_type_t;
 
 /*! Parsed \@SQ lines */
 typedef struct {
     char *name;
     uint32_t len;
-    sam_hdr_type2 *ty;
-    sam_hdr_tag2  *tag;
-} SAM_SQ2;
+    sam_hdr_type_t *ty;
+    sam_hdr_tag_t  *tag;
+} sam_hdr_sq_t;
 
 /*! Parsed \@RG lines */
 typedef struct {
     char *name;
-    sam_hdr_type2 *ty;
-    sam_hdr_tag2  *tag;
+    sam_hdr_type_t *ty;
+    sam_hdr_tag_t  *tag;
     int name_len;
     int id;           // numerical ID
-} SAM_RG2;
+} sam_hdr_rg_t;
 
 /*! Parsed \@PG lines */
 typedef struct {
     char *name;
-    sam_hdr_type2 *ty;
-    sam_hdr_tag2  *tag;
+    sam_hdr_type_t *ty;
+    sam_hdr_tag_t  *tag;
     int name_len;
     int id;           // numerical ID
     int prev_id;      // -1 if none
-} SAM_PG2;
+} sam_hdr_pg_t;
 
 
 /*! Sort order parsed from @HD line */
@@ -174,7 +174,7 @@ enum sam_group_order2 {
     ORDER_REFERENCE2 = 1
 };
 
-KHASH_MAP_INIT_INT(sam_hdr_t, sam_hdr_type2*)
+KHASH_MAP_INIT_INT(sam_hdr_t, sam_hdr_type_t*)
 KHASH_MAP_INIT_STR(m_s2i2, int)
 
 /*! Primary structure for header manipulation
@@ -197,19 +197,19 @@ struct sam_hdr {
 
     // @SQ lines / references
     int nref;                 //!< Number of \@SQ lines
-    SAM_SQ2 *ref;              //!< Array of parsed \@SQ lines
+    sam_hdr_sq_t *ref;              //!< Array of parsed \@SQ lines
     khash_t(m_s2i2) *ref_hash; //!< Maps SQ SN field to ref[] index
 
     // @RG lines / read-groups
     int nrg;                  //!< Number of \@RG lines
-    SAM_RG2 *rg;               //!< Array of parsed \@RG lines
+    sam_hdr_rg_t *rg;               //!< Array of parsed \@RG lines
     khash_t(m_s2i2) *rg_hash;  //!< Maps RG ID field to rg[] index
 
     // @PG lines / programs
     int npg;                  //!< Number of \@PG lines
     int npg_end;              //!< Number of terminating \@PG lines
     int npg_end_alloc;        //!< Size of pg_end field
-    SAM_PG2 *pg;               //!< Array of parsed \@PG lines
+    sam_hdr_pg_t *pg;               //!< Array of parsed \@PG lines
     khash_t(m_s2i2) *pg_hash;  //!< Maps PG ID field to pg[] index
     int *pg_end;              //!< \@PG chain termination IDs
 
@@ -264,7 +264,7 @@ void sam_hdr_free2(sam_hdr_t *hdr);
  *
  * Returns NULL if no type/ID is found
  */
-sam_hdr_type2 *sam_hdr_find_type2(sam_hdr_t *hdr, const char *type,
+sam_hdr_type_t *sam_hdr_find_type2(sam_hdr_t *hdr, const char *type,
                            const char *ID_key, const char *ID_value);
 
 /*
@@ -277,14 +277,14 @@ sam_hdr_type2 *sam_hdr_find_type2(sam_hdr_t *hdr, const char *type,
  * Returns 0 on success
  *        -1 on failure
  */
-int sam_hdr_update2(sam_hdr_t *sh, sam_hdr_type2 *type, va_list ap);
+int sam_hdr_update2(sam_hdr_t *sh, sam_hdr_type_t *type, va_list ap);
 
-sam_hdr_tag2 *sam_hdr_find_key2(sam_hdr_type2 *type,
+sam_hdr_tag_t *sam_hdr_find_key2(sam_hdr_type_t *type,
                               const char *key,
-                              sam_hdr_tag2 **prev);
+                              sam_hdr_tag_t **prev);
 
 int sam_hdr_remove_key2(sam_hdr_t *sh,
-                       sam_hdr_type2 *type,
+                       sam_hdr_type_t *type,
                        const char *key);
 
 /*! Looks up a read-group by name and returns a pointer to the start of the
@@ -293,7 +293,7 @@ int sam_hdr_remove_key2(sam_hdr_t *sh,
  * @return
  * Returns NULL on failure
  */
-SAM_RG2 *sam_hdr_find_rg2(sam_hdr_t *hdr, const char *rg);
+sam_hdr_rg_t *sam_hdr_find_rg2(sam_hdr_t *hdr, const char *rg);
 
 /*! Increments a reference count on hdr.
  *
