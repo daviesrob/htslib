@@ -233,6 +233,17 @@ struct sam_hdr {
  */
 sam_hdr_t *sam_hdr_new2(void);
 
+/*!
+ * Allocates space for the rest of the SAM header structures (hash tables), to prepare for
+ * processing. This method is decoupled from sam_hdr_new because some operations do not
+ * process the header, hence no need of parsing the text.
+ *
+ * @return
+ * Returns -1 on error, 0 on success
+ *
+ */
+int sam_hdr_init(sam_hdr_t *sh);
+
 /*! Produces a duplicate copy of hdr and returns it.
  * @return
  * Returns NULL on failure

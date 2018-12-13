@@ -462,7 +462,7 @@ static int sam_hdr_remove_line(sam_hdr_t *hdr, const char *type_name, sam_hdr_ty
 
     pool_free(hdr->type_pool, type_found);
 
-    hdr->dirty = 1; //mark text as dirty and force a rebuild
+    hdr->dirty = 1;
 
     return 0;
 }
@@ -531,15 +531,12 @@ static int sam_hdr_rebuild_lines(const sam_hdr_t *hdr, khint_t k, kstring_t *ks)
 }
 
 static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
+    sam_hdr_type_t *last_comm = NULL;
     int i, lno;
     char *hdr;
-    sam_hdr_type_t *last_comm = NULL;
 
-    if (len > SSIZE_MAX)
+    if (!sh || !lines || len > SSIZE_MAX)
         return -1;
-
-    if (!lines)
-        return 0;
 
     if (!len)
         len = strlen(lines);
@@ -683,7 +680,7 @@ static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
     return 0;
 }
 
-static int bootstrap_sam_hdr(bam_hdr_t *bh) {
+static int sam_hdr_populate(bam_hdr_t *bh) {
     sam_hdr_t *sh = sam_hdr_new2();
 
     if (!sh)
@@ -704,9 +701,9 @@ static int bootstrap_sam_hdr(bam_hdr_t *bh) {
 }
 
 /** Remove outdated header text
-    
+
     @param bh     BAM header
-    
+
     This is called when API functions have changed the header so that the
     text version is no longer valid.
  */
@@ -734,13 +731,43 @@ const char *sam_hdr_str2(bam_hdr_t *bh) {
 }
 
 /*
+ * Reconstructs the kstring from the header hash table.
+ * Returns 0 on success
+ *        -1 on failure
+ */
+int sam_hdr_rebuild2(bam_hdr_t *bh) {
+    sam_hdr_t *sh;
+    if (!bh || !(sh = bh->hdr))
+        return -1;
+
+    /* If header text wasn't changed or header is empty, don't rebuild it. */
+    if (!sh->dirty)
+        return 0;
+
+    kstring_t ks = KS_INITIALIZER;
+    if (sam_hdr_rebuild_text(sh, &ks) != 0) {
+        KS_FREE(&ks);
+        return -1;
+    }
+
+    sh->dirty = 0;
+
+    /* Sync */
+    free(bh->text);
+    bh->l_text = ks_len(&ks);
+    bh->text = ks_release(&ks);
+
+    return 0;
+}
+
+/*
  * Appends a formatted line to an existing SAM header.
  * Line is a full SAM header record, eg "@SQ\tSN:foo\tLN:100", with
  * optional new-line. If it contains more than 1 line then multiple lines
  * will be added in order.
  *
  * Input text is of maximum length len or as terminated earlier by a NUL.
- * Len may be 0 if unknown, in which case lines must be NUL-terminated.
+ * len may be 0 if unknown, in which case lines must be NUL-terminated.
  *
  * Returns 0 on success
  *        -1 on failure
@@ -755,7 +782,7 @@ int sam_hdr_add_lines2(bam_hdr_t *bh, const char *lines, int len) {
         return 0;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -785,7 +812,7 @@ int sam_hdr_add_line2(bam_hdr_t *bh, const char *type, ...) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -800,22 +827,6 @@ int sam_hdr_add_line2(bam_hdr_t *bh, const char *type, ...) {
     return ret;
 }
 
-/*
- * Tokenises a SAM header into a hash table.
- * Also extracts a few bits on specific data types, such as @RG lines.
- *
- * Returns 0 on success
- *         -1 on failure
- */
-int sam_hdr_parse2(bam_hdr_t *bh, const char *hdr, int len) {
-    if (!bh || (-1 == sam_hdr_add_lines2(bh, hdr, len)))
-        return -1;
-
-    sam_hdr_link_pg2(bh);
-    sam_hdr_rebuild2(bh);
-
-    return 0;
-}
 
 /*
  * As per sam_hdr_type, but returns a complete line of formatted text
@@ -834,7 +845,7 @@ char *sam_hdr_find_line2(bam_hdr_t *bh, const char *type,
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -880,7 +891,7 @@ int sam_hdr_remove_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -914,7 +925,7 @@ int sam_hdr_remove_line_pos2(bam_hdr_t *bh, const char *type, int position) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -949,13 +960,43 @@ int sam_hdr_remove_line_pos2(bam_hdr_t *bh, const char *type, int position) {
     return ret;
 }
 
-int sam_hdr_keep_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
+int sam_hdr_update_line(bam_hdr_t *bh, const char *type,
+        const char *ID_key, const char *ID_value, ...) {
+    sam_hdr_t *sh;
+    if (!bh)
+        return -1;
+
+    if (!(sh = bh->hdr)) {
+        if (sam_hdr_populate(bh) != 0)
+            return -1;
+        sh = bh->hdr;
+    }
+
+    int ret;
+    sam_hdr_type_t *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    if (!ty)
+        return -1;
+
+    va_list args;
+    va_start(args, ID_value);
+    ret = sam_hdr_update2(sh, ty, args);
+    va_end(args);
+
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
+    if (!ret)
+        bh->l_text = 0;
+
+    return ret;
+}
+
+int sam_hdr_keep_line(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
     sam_hdr_t *sh;
     if (!bh || !type)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -981,6 +1022,8 @@ int sam_hdr_keep_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key, 
     return 0;
 }
 
+/* ==== Key:val level methods ==== */
+
 const char *sam_hdr_find_tag2(bam_hdr_t *bh,
         const char *type,
         const char *ID_key,
@@ -991,7 +1034,7 @@ const char *sam_hdr_find_tag2(bam_hdr_t *bh,
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -1017,7 +1060,7 @@ int sam_hdr_remove_tag2(bam_hdr_t *bh,
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1027,34 +1070,6 @@ int sam_hdr_remove_tag2(bam_hdr_t *bh,
         return -1;
 
     int ret = sam_hdr_remove_key2(sh, ty, key);
-    if (!ret && sh->dirty)
-        redact_header_text(bh);
-
-    return ret;
-}
-
-int sam_hdr_find_update2(bam_hdr_t *bh, const char *type,
-        const char *ID_key, const char *ID_value, ...) {
-    sam_hdr_t *sh;
-    if (!bh)
-        return -1;
-
-    if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
-            return -1;
-        sh = bh->hdr;
-    }
-
-    int ret;
-    sam_hdr_type_t *ty = sam_hdr_find_type2(sh, type, ID_key, ID_value);
-    if (!ty)
-        return -1;
-
-    va_list args;
-    va_start(args, ID_value);
-    ret = sam_hdr_update2(sh, ty, args);
-    va_end(args);
-
     if (!ret && sh->dirty)
         redact_header_text(bh);
 
@@ -1107,40 +1122,6 @@ int sam_hdr_rebuild_text(const sam_hdr_t *sh, kstring_t *ks) {
 }
 
 /*
- * Reconstructs the kstring from the header hash table.
- * Returns 0 on success
- *        -1 on failure
- */
-int sam_hdr_rebuild2(bam_hdr_t *bh) {
-    sam_hdr_t *sh;
-    if (!bh)
-        return -1;
-
-    if (!(sh = bh->hdr))
-        return 0;
-
-    /* If header text wasn't changed or header is empty, don't rebuild it. */
-    if (!sh->dirty)
-        return 0;
-
-    /* Order: HD then others */
-    kstring_t ks = KS_INITIALIZER;
-    if (sam_hdr_rebuild_text(sh, &ks) != 0) {
-        KS_FREE(&ks);
-        return -1;
-    }
-
-    sh->dirty = 0;
-
-    /* Sync */
-    free(bh->text);
-    bh->l_text = ks_len(&ks);
-    bh->text   = ks_release(&ks);
-
-    return 0;
-}
-
-/*
  * Looks up a reference sequence by name and returns the numerical ID.
  * Returns -1 if unknown reference.
  */
@@ -1152,7 +1133,7 @@ int sam_hdr_name2ref2(bam_hdr_t *bh, const char *ref) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1186,7 +1167,7 @@ int sam_hdr_link_pg2(bam_hdr_t *bh) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1245,13 +1226,13 @@ int sam_hdr_link_pg2(bam_hdr_t *bh) {
  * The value returned is valid until the next call to
  * this function.
  */
-const char *sam_hdr_PG_ID2(bam_hdr_t *bh, const char *name) {
+const char *sam_hdr_pg_id(bam_hdr_t *bh, const char *name) {
     sam_hdr_t *sh;
     if (!bh)
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -1284,13 +1265,13 @@ const char *sam_hdr_PG_ID2(bam_hdr_t *bh, const char *name) {
  * Returns 0 on success
  *        -1 on failure
  */
-int sam_hdr_add_PG2(bam_hdr_t *bh, const char *name, ...) {
+int sam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
     sam_hdr_t *sh;
     if (!bh)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bootstrap_sam_hdr(bh) != 0)
+        if (sam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1310,7 +1291,7 @@ int sam_hdr_add_PG2(bam_hdr_t *bh, const char *name, ...) {
         for (i = 0; i < nends; i++) {
             va_start(args, name);
             if (-1 == sam_hdr_vadd2(sh, "PG", args,
-                                   "ID", sam_hdr_PG_ID2(bh, name),
+                                   "ID", sam_hdr_pg_id(bh, name),
                                    "PN", name,
                                    "PP", sh->pg[end[i]].name,
                                    NULL)) {
@@ -1324,7 +1305,7 @@ int sam_hdr_add_PG2(bam_hdr_t *bh, const char *name, ...) {
     } else {
         va_start(args, name);
         if (-1 == sam_hdr_vadd2(sh, "PG", args,
-                               "ID", sam_hdr_PG_ID2(bh, name),
+                               "ID", sam_hdr_pg_id(bh, name),
                                "PN", name,
                                NULL))
             return -1;
@@ -1340,7 +1321,8 @@ int sam_hdr_add_PG2(bam_hdr_t *bh, const char *name, ...) {
 /* ==== Internal methods ==== */
 
 /*
- * Creates an empty SAM header, ready to be populated.
+ * Creates an empty SAM header.  Allocates space for the SAM header
+ * structures (hash tables) ready to be populated.
  *
  * Returns a sam_hdr_t struct on success (free with sam_hdr_free())
  *         NULL on failure
@@ -1635,8 +1617,8 @@ int sam_hdr_remove_key2(sam_hdr_t *sh,
     }
     pool_free(sh->tag_pool, tag);
     sh->dirty = 1; //mark text as dirty and force a rebuild
-    
-    return 0;
+
+    return 1;
 }
 
 /*
