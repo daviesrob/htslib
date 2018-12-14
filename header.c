@@ -1393,8 +1393,18 @@ err:
  * Produces a duplicate copy of hdr and returns it.
  * Returns NULL on failure
  */
-sam_hdr_t *sam_hdr_dup2(sam_hdr_t *source) {
+sam_hdr_t *sam_hdr_dup2(sam_hdr_t *h0) {
+    if (!h0 || !h0->text.s)
         return NULL;
+
+    sam_hdr_t *h1 = sam_hdr_new2();
+    if (!h1)
+        return NULL;
+
+    if (-1 == kputs(ks_str(&h0->text), &h1->text))
+        return NULL;
+
+    return h1;
 }
 
 /*! Deallocates all storage used by a sam_hdr_t struct.
@@ -1657,6 +1667,53 @@ void sam_hdr_decr_ref2(sam_hdr_t *sh) {
     if (!sh)
         return;
     sam_hdr_free2(sh);
+}
+
+void sam_hdr_dump(sam_hdr_t *sh) {
+    khint_t k;
+    int i;
+
+    printf("===DUMP===\n");
+    for (k = kh_begin(sh->h); k != kh_end(sh->h); k++) {
+        sam_hdr_type_t *t1, *t2;
+        char c[2];
+
+        if (!kh_exist(sh->h, k))
+            continue;
+
+        t1 = t2 = kh_val(sh->h, k);
+        c[0] = kh_key(sh->h, k)>>8;
+        c[1] = kh_key(sh->h, k)&0xff;
+        printf("Type %.2s, count %d\n", c, t1->prev->order+1);
+
+        do {
+            sam_hdr_tag_t *tag;
+            printf(">>>%d ", t1->order);
+            for (tag = t1->tag; tag; tag=tag->next) {
+                if (strncmp(c, "CO", 2))
+                    printf("\"%.2s\":\"%.*s\"\t", tag->str, tag->len-3, tag->str+3);
+                else
+                    printf("%s", tag->str);
+            }
+            putchar('\n');
+            t1 = t1->next;
+        } while (t1 != t2);
+    }
+
+    /* Dump out PG chains */
+    printf("\n@PG chains:\n");
+    for (i = 0; i < sh->npg_end; i++) {
+        int j;
+        printf("  %d:", i);
+        for (j = sh->pg_end[i]; j != -1; j = sh->pg[j].prev_id) {
+            printf("%s%d(%.*s)",
+                   j == sh->pg_end[i] ? " " : "->",
+                   j, sh->pg[j].name_len, sh->pg[j].name);
+        }
+        printf("\n");
+    }
+
+    puts("===END DUMP===");
 }
 
 /*

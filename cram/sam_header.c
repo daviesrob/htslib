@@ -46,54 +46,7 @@ static void sam_hdr_error(char *msg, char *line, int len, int lno) {
     hts_log_error("%s at line %d: \"%.*s\"", msg, lno, j, line);
 }
 
-void sam_hdr_dump(SAM_hdr *hdr) {
-    khint_t k;
-    int i;
 
-    sam_hdr_rebuild(hdr);
-
-    printf("===DUMP===\n");
-    for (k = kh_begin(hdr->h); k != kh_end(hdr->h); k++) {
-        SAM_hdr_type *t1, *t2;
-        char c[2];
-
-        if (!kh_exist(hdr->h, k))
-            continue;
-
-        t1 = t2 = kh_val(hdr->h, k);
-        c[0] = kh_key(hdr->h, k)>>8;
-        c[1] = kh_key(hdr->h, k)&0xff;
-        printf("Type %.2s, count %d\n", c, t1->prev->order+1);
-
-        do {
-            SAM_hdr_tag *tag;
-            printf(">>>%d ", t1->order);
-            for (tag = t1->tag; tag; tag=tag->next) {
-                if (strncmp(c, "CO", 2))
-                    printf("\"%.2s\":\"%.*s\"\t", tag->str, tag->len-3, tag->str+3);
-                else
-                    printf("%s", tag->str);
-            }
-            putchar('\n');
-            t1 = t1->next;
-        } while (t1 != t2);
-    }
-
-    /* Dump out PG chains */
-    printf("\n@PG chains:\n");
-    for (i = 0; i < hdr->npg_end; i++) {
-        int j;
-        printf("  %d:", i);
-        for (j = hdr->pg_end[i]; j != -1; j = hdr->pg[j].prev_id) {
-            printf("%s%d(%.*s)",
-                   j == hdr->pg_end[i] ? " " : "->",
-                   j, hdr->pg[j].name_len, hdr->pg[j].name);
-        }
-        printf("\n");
-    }
-
-    puts("===END DUMP===");
-}
 
 /* Updates the hash tables in the SAM_hdr structure.
  *
@@ -1489,41 +1442,4 @@ int sam_hdr_add_PG(SAM_hdr *sh, const char *name, ...) {
     return 0;
 }
 
-/*
- * A function to help with construction of CL tags in @PG records.
- * Takes an argc, argv pair and returns a single space-separated string.
- * This string should be deallocated by the calling function.
- *
- * Returns malloced char * on success
- *         NULL on failure
- */
-char *stringify_argv(int argc, char *argv[]) {
-    char *str, *cp;
-    size_t nbytes = 1;
-    int i, j;
 
-    /* Allocate */
-    for (i = 0; i < argc; i++) {
-        if (i > 0) nbytes += 1;
-        nbytes += strlen(argv[i]);
-    }
-    if (!(str = malloc(nbytes)))
-        return NULL;
-
-    /* Copy */
-    cp = str;
-    for (i = 0; i < argc; i++) {
-        if (i > 0) *cp++ = ' ';
-        j = 0;
-        while (argv[i][j]) {
-            if (argv[i][j] == '\t')
-                *cp++ = ' ';
-            else
-                *cp++ = argv[i][j];
-            j++;
-        }
-    }
-    *cp++ = 0;
-
-    return str;
-}
