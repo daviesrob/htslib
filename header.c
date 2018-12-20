@@ -754,7 +754,7 @@ static int rebuild_target_arrays(bam_hdr_t *bh) {
     return 0;
 }
 
-int sam_hdr_populate(bam_hdr_t *bh) {
+int bam_hdr_populate(bam_hdr_t *bh) {
     sam_hdr_t *sh = sam_hdr_new();
 
     if (!sh)
@@ -773,7 +773,7 @@ int sam_hdr_populate(bam_hdr_t *bh) {
     if (sh->refs_changed && rebuild_target_arrays(bh) != 0)
         return -1;
 
-    sam_hdr_link_pg(bh);
+    bam_hdr_link_pg(bh);
 
     return 0;
 }
@@ -794,15 +794,15 @@ static void redact_header_text(bam_hdr_t *bh) {
 
 /* ==== Public methods ==== */
 
-int sam_hdr_length(bam_hdr_t *bh) {
-    if (-1 == sam_hdr_rebuild(bh))
+int bam_hdr_length(bam_hdr_t *bh) {
+    if (-1 == bam_hdr_rebuild(bh))
         return -1;
 
     return bh->l_text;
 }
 
-const char *sam_hdr_str(bam_hdr_t *bh) {
-    if (-1 == sam_hdr_rebuild(bh))
+const char *bam_hdr_str(bam_hdr_t *bh) {
+    if (-1 == bam_hdr_rebuild(bh))
         return NULL;
 
     return bh->text;
@@ -813,7 +813,7 @@ const char *sam_hdr_str(bam_hdr_t *bh) {
  * Returns 0 on success
  *        -1 on failure
  */
-int sam_hdr_rebuild(bam_hdr_t *bh) {
+int bam_hdr_rebuild(bam_hdr_t *bh) {
     sam_hdr_t *sh;
     if (!bh || !(sh = bh->hdr))
         return -1;
@@ -855,7 +855,7 @@ int sam_hdr_rebuild(bam_hdr_t *bh) {
  * Returns 0 on success
  *        -1 on failure
  */
-int sam_hdr_add_lines(bam_hdr_t *bh, const char *lines, int len) {
+int bam_hdr_add_lines(bam_hdr_t *bh, const char *lines, int len) {
     sam_hdr_t *sh;
 
     if (!bh || !lines)
@@ -865,7 +865,7 @@ int sam_hdr_add_lines(bam_hdr_t *bh, const char *lines, int len) {
         return 0;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -890,7 +890,7 @@ int sam_hdr_add_lines(bam_hdr_t *bh, const char *lines, int len) {
  * Returns index for specific entry on success (eg 2nd SQ, 4th RG)
  *        -1 on failure
  */
-int sam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
+int bam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
     va_list args;
     sam_hdr_t *sh;
 
@@ -898,7 +898,7 @@ int sam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -929,14 +929,14 @@ int sam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
  *
  * Returns NULL if no type/ID is found.
  */
-char *sam_hdr_find_line(bam_hdr_t *bh, const char *type,
+char *bam_hdr_find_line(bam_hdr_t *bh, const char *type,
                         const char *ID_key, const char *ID_value) {
     sam_hdr_t *sh;
     if (!bh)
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -976,13 +976,13 @@ char *sam_hdr_find_line(bam_hdr_t *bh, const char *type,
  * Returns 0 on success and -1 on error
  */
 
-int sam_hdr_remove_line_key(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
+int bam_hdr_remove_line_key(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
     sam_hdr_t *sh;
     if (!bh || !type)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1010,13 +1010,13 @@ int sam_hdr_remove_line_key(bam_hdr_t *bh, const char *type, const char *ID_key,
  * Returns 0 on success and -1 on error
  */
 
-int sam_hdr_remove_line_pos(bam_hdr_t *bh, const char *type, int position) {
+int bam_hdr_remove_line_pos(bam_hdr_t *bh, const char *type, int position) {
     sam_hdr_t *sh;
     if (!bh || !type || position < 0)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1051,14 +1051,14 @@ int sam_hdr_remove_line_pos(bam_hdr_t *bh, const char *type, int position) {
     return ret;
 }
 
-int sam_hdr_update_line(bam_hdr_t *bh, const char *type,
+int bam_hdr_update_line(bam_hdr_t *bh, const char *type,
         const char *ID_key, const char *ID_value, ...) {
     sam_hdr_t *sh;
     if (!bh)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1081,13 +1081,13 @@ int sam_hdr_update_line(bam_hdr_t *bh, const char *type,
     return ret;
 }
 
-int sam_hdr_keep_line(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
+int bam_hdr_keep_line(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
     sam_hdr_t *sh;
     if (!bh || !type)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1115,7 +1115,7 @@ int sam_hdr_keep_line(bam_hdr_t *bh, const char *type, const char *ID_key, const
 
 /* ==== Key:val level methods ==== */
 
-const char *sam_hdr_find_tag(bam_hdr_t *bh,
+const char *bam_hdr_find_tag(bam_hdr_t *bh,
         const char *type,
         const char *ID_key,
         const char *ID_value,
@@ -1125,7 +1125,7 @@ const char *sam_hdr_find_tag(bam_hdr_t *bh,
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -1141,7 +1141,7 @@ const char *sam_hdr_find_tag(bam_hdr_t *bh,
     return tg->str;
 }
 
-int sam_hdr_remove_tag(bam_hdr_t *bh,
+int bam_hdr_remove_tag(bam_hdr_t *bh,
         const char *type,
         const char *ID_key,
         const char *ID_value,
@@ -1151,7 +1151,7 @@ int sam_hdr_remove_tag(bam_hdr_t *bh,
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1216,7 +1216,7 @@ int sam_hdr_rebuild_text(const sam_hdr_t *sh, kstring_t *ks) {
  * Looks up a reference sequence by name and returns the numerical ID.
  * Returns -1 if unknown reference.
  */
-int sam_hdr_name2ref(bam_hdr_t *bh, const char *ref) {
+int bam_hdr_name2ref(bam_hdr_t *bh, const char *ref) {
     sam_hdr_t *sh;
     khint_t k;
 
@@ -1224,7 +1224,7 @@ int sam_hdr_name2ref(bam_hdr_t *bh, const char *ref) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1250,7 +1250,7 @@ int sam_hdr_name2ref(bam_hdr_t *bh, const char *ref) {
  * Returns 0 on success
  *        -1 on failure (indicating broken PG/PP records)
  */
-int sam_hdr_link_pg(bam_hdr_t *bh) {
+int bam_hdr_link_pg(bam_hdr_t *bh) {
     sam_hdr_t *sh;
     int i, j, ret = 0;
 
@@ -1258,7 +1258,7 @@ int sam_hdr_link_pg(bam_hdr_t *bh) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1317,13 +1317,13 @@ int sam_hdr_link_pg(bam_hdr_t *bh) {
  * The value returned is valid until the next call to
  * this function.
  */
-const char *sam_hdr_pg_id(bam_hdr_t *bh, const char *name) {
+const char *bam_hdr_pg_id(bam_hdr_t *bh, const char *name) {
     sam_hdr_t *sh;
     if (!bh)
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -1356,13 +1356,13 @@ const char *sam_hdr_pg_id(bam_hdr_t *bh, const char *name) {
  * Returns 0 on success
  *        -1 on failure
  */
-int sam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
+int bam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
     sam_hdr_t *sh;
     if (!bh)
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (sam_hdr_populate(bh) != 0)
+        if (bam_hdr_populate(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1382,7 +1382,7 @@ int sam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
         for (i = 0; i < nends; i++) {
             va_start(args, name);
             if (-1 == sam_hdr_vadd(sh, "PG", args,
-                                   "ID", sam_hdr_pg_id(bh, name),
+                                   "ID", bam_hdr_pg_id(bh, name),
                                    "PN", name,
                                    "PP", sh->pg[end[i]].name,
                                    NULL)) {
@@ -1396,7 +1396,7 @@ int sam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
     } else {
         va_start(args, name);
         if (-1 == sam_hdr_vadd(sh, "PG", args,
-                               "ID", sam_hdr_pg_id(bh, name),
+                               "ID", bam_hdr_pg_id(bh, name),
                                "PN", name,
                                NULL))
             return -1;
@@ -1867,7 +1867,7 @@ SAM_hdr *sam_hdr_parse_(const char *hdr, int len) {
     bam_hdr_t *bh = bam_hdr_init();
     if (!bh) return NULL;
 
-    if (sam_hdr_add_lines(bh, hdr, len) != 0) {
+    if (bam_hdr_add_lines(bh, hdr, len) != 0) {
         bam_hdr_destroy(bh);
         return NULL;
     }

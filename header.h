@@ -230,7 +230,7 @@ struct sam_hdr {
  * @return
  * Returns -1 on error, 0 on success
  */
-int sam_hdr_populate(bam_hdr_t *bh);
+int bam_hdr_populate(bam_hdr_t *bh);
 
 /*! Creates an empty SAM header, ready to be populated.
  *
