@@ -89,7 +89,7 @@ void bam_hdr_destroy(bam_hdr_t *bh)
     if (bh->sdict) kh_destroy(s2i, (sdict_t*)bh->sdict);
     free(bh->text);
     if (bh->hdr)
-        sam_hdr_free2(bh->hdr);
+        sam_hdr_free(bh->hdr);
     free(bh);
 }
 
@@ -106,19 +106,21 @@ bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
     h->cigar_tab = NULL;
     h->sdict = NULL;
 
-    h->target_len = (uint32_t*)calloc(h0->n_targets, sizeof(uint32_t));
-    if (!h->target_len) goto fail;
-    h->target_name = (char**)calloc(h0->n_targets, sizeof(char*));
-    if (!h->target_name) goto fail;
+    if (!h0->hdr) {
+        h->target_len = (uint32_t*)calloc(h0->n_targets, sizeof(uint32_t));
+        if (!h->target_len) goto fail;
+        h->target_name = (char**)calloc(h0->n_targets, sizeof(char*));
+        if (!h->target_name) goto fail;
 
-    int i;
-    for (i = 0; i < h0->n_targets; ++i) {
-        h->target_len[i] = h0->target_len[i];
-        h->target_name[i] = strdup(h0->target_name[i]);
-        if (!h->target_name[i]) break;
+        int i;
+        for (i = 0; i < h0->n_targets; ++i) {
+            h->target_len[i] = h0->target_len[i];
+            h->target_name[i] = strdup(h0->target_name[i]);
+            if (!h->target_name[i]) break;
+        }
+        h->n_targets = i;
+        if (i < h0->n_targets) goto fail;
     }
-    h->n_targets = i;
-    if (i < h0->n_targets) goto fail;
 
     if (h0->hdr) {
         kstring_t tmp = { 0, 0, NULL };
@@ -129,6 +131,9 @@ bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
 
         h->l_text = tmp.l;
         h->text   = ks_release(&tmp);
+
+        if (update_target_arrays(h, h0->hdr, 0) != 0)
+            goto fail;
     } else {
         h->l_text = h0->l_text;
         h->text = malloc(h->l_text + 1);
@@ -136,6 +141,7 @@ bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
         memcpy(h->text, h0->text, h->l_text);
         h->text[h->l_text] = '\0';
     }
+
     return h;
 
  fail:
@@ -284,7 +290,7 @@ int bam_hdr_write(BGZF *fp, bam_hdr_t *h)
 {
     int32_t i, name_len, x;
     if (h->hdr) {
-        if (-1 == sam_hdr_rebuild2(h)) return -1;
+        if (-1 == sam_hdr_rebuild(h)) return -1;
     }
     // write "BAM1"
     if (bgzf_write(fp, "BAM\1", 4) < 0) return -1;
@@ -1218,7 +1224,7 @@ bam_hdr_t *sam_hdr_read(htsFile *fp)
         return sam_hdr_sanitise(bam_hdr_read(fp->fp.bgzf));
 
     case cram:
-        return sam_hdr_sanitise(cram_header_to_bam(fp->fp.cram->header));
+        return sam_hdr_sanitise(bam_hdr_dup(fp->fp.cram->header));
 
     case sam: {
         kstring_t str = { 0, 0, NULL };
@@ -1296,7 +1302,7 @@ int sam_hdr_write(htsFile *fp, bam_hdr_t *h)
     }
 
     if (h->hdr) {
-        if (-1 == sam_hdr_rebuild2(h))
+        if (-1 == sam_hdr_rebuild(h))
             return -1;
     }
 
@@ -1314,9 +1320,7 @@ int sam_hdr_write(htsFile *fp, bam_hdr_t *h)
 
     case cram: {
         cram_fd *fd = fp->fp.cram;
-        SAM_hdr *hdr = bam_header_to_cram(h);
-        if (! hdr) return -1;
-        if (cram_set_header(fd, hdr) < 0) return -1;
+        if (cram_set_header(fd, h) < 0) return -1;
         if (fp->fn_aux)
             cram_load_reference(fd, fp->fn_aux);
         if (cram_write_SAM_hdr(fd, fd->header) < 0) return -1;
@@ -1451,10 +1455,10 @@ int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
         if (sam_hdr_update_line(h, "HD", NULL, NULL, key, val, NULL) != 0)
             return -1;
     } else {
-        if (sam_hdr_remove_tag2(h, "HD", NULL, NULL, key) != 0)
+        if (sam_hdr_remove_tag(h, "HD", NULL, NULL, key) != 0)
             return -1;
     }
-    return sam_hdr_rebuild2(h);
+    return sam_hdr_rebuild(h);
 }
 /**********************
  *** SAM record I/O ***

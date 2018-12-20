@@ -503,7 +503,9 @@ static void copy_check_alignment(const char *infname, const char *informat,
 
  err:
     bam_destroy1(aln);
+    aln = NULL;
     bam_hdr_destroy(header);
+    header = NULL;
     if (in) sam_close(in);
     if (out) sam_close(out);
 }
@@ -550,13 +552,13 @@ static void use_header_api() {
         fail("reading header from file");
         goto err;
     }
-    r = sam_hdr_remove_tag2(header, "HD", NULL, NULL, "GO");
+    r = sam_hdr_remove_tag(header, "HD", NULL, NULL, "GO");
     if (r != 1) { fail("sam_hdr_remove_tag2"); goto err; }
 
     r = sam_hdr_update_line(header, "HD", NULL, NULL, "VN", "1.5", NULL);
     if (r != 0) { fail("sam_hdr_find_update2 HD"); goto err; }
 
-    r = sam_hdr_add_line2(header, "SQ", "SN", "ref3", "LN", "5003", NULL);
+    r = sam_hdr_add_line(header, "SQ", "SN", "ref3", "LN", "5003", NULL);
     if (r < 0) { fail("sam_hdr_add_line2"); goto err; }
 
     r = sam_hdr_update_line(header, "SQ", "SN", "ref1",

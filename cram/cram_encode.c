@@ -946,7 +946,6 @@ static int cram_encode_slice(cram_fd *fd, cram_container *c,
         } else {
             s->block[DS_TN] = s->block[0];
         }
-        s->block[DS_TN] = s->block[DS_TN];
     }
 
     // Embedded reference
@@ -2875,10 +2874,10 @@ static int process_one_read(cram_fd *fd, cram_container *c,
 
     /* Read group, identified earlier */
     if (rg) {
-        SAM_RG *brg = sam_hdr_find_rg(fd->header, rg);
+        sam_hdr_rg_t *brg = sam_hdr_find_rg(fd->header->hdr, rg);
         cr->rg = brg ? brg->id : -1;
     } else if (CRAM_MAJOR_VERS(fd->version) == 1) {
-        SAM_RG *brg = sam_hdr_find_rg(fd->header, "UNKNOWN");
+        sam_hdr_rg_t *brg = sam_hdr_find_rg(fd->header->hdr, "UNKNOWN");
         assert(brg);
     } else {
         cr->rg = -1;
