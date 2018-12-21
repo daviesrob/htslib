@@ -1409,6 +1409,17 @@ int bam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
     return 0;
 }
 
+/*! Increments a reference count on bh.
+ *
+ * This permits multiple files to share the same header, all calling
+ * sam_hdr_free when done, without causing errors for other open  files.
+ */
+void bam_hdr_incr_ref(bam_hdr_t *bh) {
+    if (!bh || !bh->hdr)
+        return;
+    bh->hdr->ref_count++;
+}
+
 /* ==== Internal methods ==== */
 
 /*
@@ -1506,7 +1517,6 @@ sam_hdr_t *sam_hdr_dup(sam_hdr_t *h0) {
  * it is still non-zero then the header is assumed to be in use by another
  * caller and the free is not done.
  *
- * This is a synonym for sam_hdr_dec_ref().
  */
 void sam_hdr_destroy(sam_hdr_t *hdr) {
     if (!hdr)
@@ -1735,31 +1745,6 @@ sam_hdr_rg_t *sam_hdr_find_rg(sam_hdr_t *hdr, const char *rg) {
     return k == kh_end(hdr->rg_hash)
         ? NULL
         : &hdr->rg[kh_val(hdr->rg_hash, k)];
-}
-
-/*! Increments a reference count on sh.
- *
- * This permits multiple files to share the same header, all calling
- * sam_hdr_free when done, without causing errors for other open  files.
- */
-void sam_hdr_incr_ref(sam_hdr_t *sh) {
-    if (!sh)
-        return;
-    sh->ref_count++;
-}
-
-/*! Increments a reference count on sh.
- *
- * This permits multiple files to share the same header, all calling
- * sam_hdr_free when done, without causing errors for other open  files.
- *
- * If the reference count hits zero then the header is automatically
- * freed. This makes it a synonym for sam_hdr_free().
- */
-void sam_hdr_decr_ref(sam_hdr_t *sh) {
-    if (!sh)
-        return;
-    sam_hdr_destroy(sh);
 }
 
 void sam_hdr_dump(sam_hdr_t *sh) {

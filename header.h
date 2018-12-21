@@ -323,23 +323,6 @@ int sam_hdr_remove_key(sam_hdr_t *sh,
  */
 sam_hdr_rg_t *sam_hdr_find_rg(sam_hdr_t *hdr, const char *rg);
 
-/*! Increments a reference count on hdr.
- *
- * This permits multiple files to share the same header, all calling
- * sam_hdr_free when done, without causing errors for other open  files.
- */
-void sam_hdr_incr_ref(sam_hdr_t *sh);
-
-/*! Increments a reference count on hdr.
- *
- * This permits multiple files to share the same header, all calling
- * sam_hdr_free when done, without causing errors for other open  files.
- *
- * If the reference count hits zero then the header is automatically
- * freed. This makes it a synonym for sam_hdr_free().
- */
-void sam_hdr_decr_ref(sam_hdr_t *sh);
-
 /*! Returns the sort order from the @HD SO: field */
 enum sam_sort_order sam_hdr_sort_order(sam_hdr_t *hdr);
 
