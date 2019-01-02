@@ -1343,14 +1343,14 @@ const char *bam_hdr_pg_id(bam_hdr_t *bh, const char *name) {
 /*
  * Add an @PG line.
  *
- * If we wish complete control over this use sam_hdr_add() directly. This
+ * If we wish complete control over this use bam_hdr_add_line() directly. This
  * function uses that, but attempts to do a lot of tedious house work for
  * you too.
  *
  * - It will generate a suitable ID if the supplied one clashes.
  * - It will generate multiple @PG records if we have multiple PG chains.
  *
- * Call it as per sam_hdr_add() with a series of key,value pairs ending
+ * Call it as per bam_hdr_add_line() with a series of key,value pairs ending
  * in NULL.
  *
  * Returns 0 on success
