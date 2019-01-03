@@ -1869,7 +1869,7 @@ static int refs_from_header(refs_t *r, cram_fd *fd, bam_hdr_t *h) {
         return 0;
 
     if (!h->hdr) {
-        if (-1 == bam_hdr_populate(h))
+        if (-1 == bam_hdr_parse(h))
             return -1;
     }
 

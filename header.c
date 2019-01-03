@@ -754,7 +754,7 @@ static int rebuild_target_arrays(bam_hdr_t *bh) {
     return 0;
 }
 
-int bam_hdr_populate(bam_hdr_t *bh) {
+int bam_hdr_parse(bam_hdr_t *bh) {
     sam_hdr_t *sh = sam_hdr_new();
 
     if (!sh)
@@ -865,7 +865,7 @@ int bam_hdr_add_lines(bam_hdr_t *bh, const char *lines, int len) {
         return 0;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -898,7 +898,7 @@ int bam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -936,7 +936,7 @@ char *bam_hdr_find_line(bam_hdr_t *bh, const char *type,
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -982,7 +982,7 @@ int bam_hdr_remove_line_key(bam_hdr_t *bh, const char *type, const char *ID_key,
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1016,7 +1016,7 @@ int bam_hdr_remove_line_pos(bam_hdr_t *bh, const char *type, int position) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1058,7 +1058,7 @@ int bam_hdr_update_line(bam_hdr_t *bh, const char *type,
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1087,7 +1087,7 @@ int bam_hdr_keep_line(bam_hdr_t *bh, const char *type, const char *ID_key, const
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1125,7 +1125,7 @@ const char *bam_hdr_find_tag(bam_hdr_t *bh,
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -1151,7 +1151,7 @@ int bam_hdr_remove_tag(bam_hdr_t *bh,
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1224,7 +1224,7 @@ int bam_hdr_name2ref(bam_hdr_t *bh, const char *ref) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1257,7 +1257,7 @@ int bam_hdr_link_pg(bam_hdr_t *bh) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }
@@ -1322,7 +1322,7 @@ const char *bam_hdr_pg_id(bam_hdr_t *bh, const char *name) {
         return NULL;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return NULL;
         sh = bh->hdr;
     }
@@ -1361,7 +1361,7 @@ int bam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
         return -1;
 
     if (!(sh = bh->hdr)) {
-        if (bam_hdr_populate(bh) != 0)
+        if (bam_hdr_parse(bh) != 0)
             return -1;
         sh = bh->hdr;
     }

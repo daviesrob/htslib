@@ -234,7 +234,7 @@ struct sam_hdr {
  *              bam_hdr_init call
  * @return      0 on success, -1 on failure
  */
-int bam_hdr_populate(bam_hdr_t *bh);
+int bam_hdr_parse(bam_hdr_t *bh);
 
 /*! Creates an empty SAM header, ready to be populated.
  *
