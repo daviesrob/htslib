@@ -1234,7 +1234,6 @@ int bam_hdr_name2ref(bam_hdr_t *bh, const char *ref) {
 
     k = kh_get(m_s2i, sh->ref_hash, ref);
     return k == kh_end(sh->ref_hash) ? bam_name2id(bh, ref) : kh_val(sh->ref_hash, k);
-
 }
 
 /*

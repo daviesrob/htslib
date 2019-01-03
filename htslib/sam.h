@@ -497,7 +497,8 @@ int bam_hdr_link_pg(bam_hdr_t *bh);
  * Returns a unique ID from a base name, which is valid
  * until the next call to this function.
  *
- * @return  valid ID on success, NULL on failure
+ * @param name  Name of the program. Eg. samtools
+ * @return      Valid ID on success, NULL on failure
  */
 const char *bam_hdr_pg_id(bam_hdr_t *sh, const char *name);
 
@@ -514,7 +515,8 @@ const char *bam_hdr_pg_id(bam_hdr_t *sh, const char *name);
  * Call it as per bam_hdr_add_line() with a series of key,value pairs ending
  * in NULL.
  *
- * @return  0 on success, -1 on failure
+ * @param name  Name of the program. Eg. samtools
+ * @return      0 on success, -1 on failure
  */
 int bam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...);
 
