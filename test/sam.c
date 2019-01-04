@@ -569,6 +569,7 @@ static void use_header_api() {
     if (r != 0) { fail("sam_hdr_add_PG2"); goto err; }
     //printf("line='%s'\n", bam_hdr_find_line(header, "SQ", "SN", "ref3"));
     //printf("tag='%s'\n", bam_hdr_find_tag(header, "SQ", "SN", "ref1", "M5"));
+    //printf("hd line='%s'\n", bam_hdr_find_hd(header));
 
     if (sam_hdr_write(out, header) < 0) {
         fail("writing headers to \"%s\"", outfname);
