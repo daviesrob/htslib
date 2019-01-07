@@ -1,6 +1,6 @@
 # Makefile for htslib, a C library for high-throughput sequencing data formats.
 #
-#    Copyright (C) 2013-2018 Genome Research Ltd.
+#    Copyright (C) 2013-2019 Genome Research Ltd.
 #
 #    Author: John Marshall <jm18@sanger.ac.uk>
 #
@@ -76,6 +76,7 @@ BUILT_TEST_PROGRAMS = \
 	test/test_kstring \
 	test/test_realn \
 	test/test-regidx \
+	test/test_str2int \
 	test/test_view \
 	test/test-vcf-api \
 	test/test-vcf-sweep \
@@ -372,6 +373,7 @@ maintainer-check:
 check test: $(BUILT_PROGRAMS) $(BUILT_TEST_PROGRAMS)
 	test/hts_endian
 	test/test_kstring
+	test/test_str2int
 	test/fieldarith test/fieldarith.sam
 	test/hfile
 	test/test_bgzf test/bgziptest.txt
@@ -411,6 +413,9 @@ test/test_realn: test/test_realn.o libhts.a
 test/test-regidx: test/test-regidx.o libhts.a
 	$(CC) $(LDFLAGS) -o $@ test/test-regidx.o libhts.a $(LIBS) -lpthread
 
+test/test_str2int: test/test_str2int.o
+	$(CC) $(LDFLAGS) -o $@ test/test_str2int.o
+
 test/test_view: test/test_view.o libhts.a
 	$(CC) $(LDFLAGS) -o $@ test/test_view.o libhts.a $(LIBS) -lpthread
 
@@ -436,6 +441,7 @@ test/test_bgzf.o: test/test_bgzf.c config.h $(htslib_bgzf_h) $(htslib_hfile_h) $
 test/test_kstring.o: test/test_kstring.c $(htslib_kstring_h)
 test/test-realn.o: test/test_realn.c config.h $(htslib_hts_h) $(htslib_sam_h) $(htslib_faidx_h)
 test/test-regidx.o: test/test-regidx.c config.h $(htslib_regidx_h) $(hts_internal_h)
+test/test_str2int.o: test/test_str2int.c $(textutils_internal_h)
 test/test_view.o: test/test_view.c config.h $(cram_h) $(htslib_sam_h)
 test/test-vcf-api.o: test/test-vcf-api.c config.h $(htslib_hts_h) $(htslib_vcf_h) $(htslib_kstring_h) $(htslib_kseq_h)
 test/test-vcf-sweep.o: test/test-vcf-sweep.c config.h $(htslib_vcf_sweep_h)
