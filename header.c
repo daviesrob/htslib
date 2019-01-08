@@ -33,8 +33,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string.h>
 #include <assert.h>
 #include "textutils_internal.h"
-
 #include "header.h"
+
+// Hash table for removing multiple lines from the header
+KHASH_SET_INIT_STR(rm)
+typedef khash_t(rm) rmhash_t;
 
 static void sam_hdr_error(char *msg, char *line, int len, int lno) {
     int j;
@@ -1044,6 +1047,8 @@ int bam_hdr_remove_line_pos(bam_hdr_t *bh, const char *type, int position) {
         type_beg = type_beg->next;
     } while (type_beg != type_end);
 
+    if (!type_found) // nothing to remove
+        return 0;
     int ret = sam_hdr_remove_line(sh, type, type_found);
     if (!ret && sh->dirty)
         redact_header_text(bh);
@@ -1075,8 +1080,6 @@ int bam_hdr_update_line(bam_hdr_t *bh, const char *type,
 
     if (!ret && sh->dirty)
         redact_header_text(bh);
-    if (!ret)
-        bh->l_text = 0;
 
     return ret;
 }
@@ -1092,23 +1095,107 @@ int bam_hdr_keep_line(bam_hdr_t *bh, const char *type, const char *ID_key, const
         sh = bh->hdr;
     }
 
+    sam_hdr_type_t *step;
+    int ret = 1, remove_all = 0;
+
     if (!strncmp(type, "PG", 2) || !strncmp(type, "CO", 2)) {
         hts_log_warning("Removing PG or CO lines is not supported!");
         return -1;
     }
 
     sam_hdr_type_t *type_found = sam_hdr_find_type(sh, type, ID_key, ID_value);
-    if (!type_found)
-        return 0;
-
-    sam_hdr_type_t *step = type_found->next;
-    int ret;
-    while (step != type_found) {
-        ret = sam_hdr_remove_line(sh, type, step);
-        step = step->next;
-        if (!ret && sh->dirty)
-            redact_header_text(bh);
+    if (!type_found) { // remove all line of this type
+        int itype = (type[0]<<8)|(type[1]);
+        khint_t k = kh_get(sam_hdr_t, sh->h, itype);
+        if (k == kh_end(sh->h))
+            return 0;
+        type_found =  kh_val(sh->h, k);
+        if (!type_found)
+            return 0;
+        remove_all = 1;
     }
+
+    step = type_found->next;
+    while (step != type_found) {
+        sam_hdr_type_t *to_remove = step;
+        step = step->next;
+        ret &= sam_hdr_remove_line(sh, type, to_remove);
+    }
+
+    if (remove_all)
+        ret &= sam_hdr_remove_line(sh, type, type_found);
+
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
+
+    return 0;
+}
+
+int bam_hdr_remove_lines(bam_hdr_t *bh, const char *type, const char *id, void *h) {
+    sam_hdr_t *sh;
+    rmhash_t *rh;
+    if (!bh || !type || !id || !(rh = (rmhash_t *)h))
+        return -1;
+
+    if (!(sh = bh->hdr)) {
+        if (bam_hdr_parse(bh) != 0)
+            return -1;
+        sh = bh->hdr;
+    }
+
+    int itype = (type[0]<<8)|(type[1]);
+    khint_t k = kh_get(sam_hdr_t, sh->h, itype);
+    if (k == kh_end(sh->h)) { // nothing to remove from
+        hts_log_warning("Type '%s' does not exist in the header", type);
+        return 0;
+    }
+
+    sam_hdr_type_t *head = kh_val(sh->h, k);
+    if (!head) {
+        hts_log_error("Header inconsistency");
+        return -1;
+    }
+
+    int ret = 1;
+    char buf[1024];
+    sam_hdr_type_t *step = head->next;
+    while (step != head) {
+        sam_hdr_tag_t * tag = sam_hdr_find_key(step, id, NULL);
+        if (tag && tag->str) {
+            int end = tag->len > 1026 ? 1023 : tag->len-3;
+            memcpy(buf, tag->str+3, end);
+            buf[end] = 0;
+
+           k = kh_get(rm, rh, buf);
+           if (k == kh_end(rh)) { // value is not in the hash table, so remove
+               sam_hdr_type_t *to_remove = step;
+               step = step->next;
+               ret &= sam_hdr_remove_line(sh, type, to_remove);
+           } else {
+               step = step->next;
+           }
+        } else { // tag is not on the line, so skip to next line
+            step = step->next;
+        }
+    }
+
+    // process the first line
+    sam_hdr_tag_t * tag = sam_hdr_find_key(head, id, NULL);
+    if (tag && tag->str) {
+        int end = tag->len > 1026 ? 1023 : tag->len-3;
+        memcpy(buf, tag->str+3, end);
+        buf[end] = 0;
+
+       k = kh_get(rm, rh, buf);
+       if (k == kh_end(rh)) { // value is not in the hash table, so remove
+           sam_hdr_type_t *to_remove = head;
+           head = head->next;
+           ret &= sam_hdr_remove_line(sh, type, to_remove);
+       }
+    }
+
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
 
     return 0;
 }
