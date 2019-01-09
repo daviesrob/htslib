@@ -932,8 +932,9 @@ int bam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
  *
  * Returns NULL if no type/ID is found.
  */
-char *bam_hdr_find_line(bam_hdr_t *bh, const char *type,
-                        const char *ID_key, const char *ID_value) {
+char *bam_hdr_find_line(bam_hdr_t *bh, const char *type, ...) {
+    //                    ) {
+    va_list args;
     sam_hdr_t *sh;
     if (!bh)
         return NULL;
@@ -943,6 +944,15 @@ char *bam_hdr_find_line(bam_hdr_t *bh, const char *type,
             return NULL;
         sh = bh->hdr;
     }
+
+    const char *ID_key, *ID_value;
+    va_start(args, type);
+    ID_key = (char *)va_arg(args, char *);
+    if (ID_key)
+        ID_value = (char *)va_arg(args, char *);
+    else
+        ID_value = NULL;
+    va_end(args);
 
     sam_hdr_type_t *ty = sam_hdr_find_type(sh, type, ID_key, ID_value);
     if (!ty) {
@@ -1221,11 +1231,17 @@ const char *bam_hdr_find_tag(bam_hdr_t *bh,
     if (!ty)
         return NULL;
 
-    sam_hdr_tag_t *tg = sam_hdr_find_key(ty, key, NULL);
-    if (!tg)
+    sam_hdr_tag_t *tag = sam_hdr_find_key(ty, key, NULL);
+    if (!tag || !tag->str || tag->len < 4)
         return NULL;
 
-    return tg->str;
+    kstring_t ks = KS_INITIALIZER;
+    if (kputsn(tag->str+3, tag->len-3, &ks) == EOF) {
+        KS_FREE(&ks);
+        return NULL;
+    }
+
+    return ks_str(&ks);
 }
 
 int bam_hdr_remove_tag(bam_hdr_t *bh,
@@ -1667,6 +1683,9 @@ sam_hdr_type_t *sam_hdr_find_type(sam_hdr_t *sh, const char *type,
 
     /* Special case for types we have prebuilt hashes on */
     if (ID_key) {
+        if (!ID_value)
+            return NULL;
+
         if (type[0]   == 'S' && type[1]   == 'Q' &&
             ID_key[0] == 'S' && ID_key[1] == 'N') {
             k = kh_get(m_s2i, sh->ref_hash, ID_value);
