@@ -312,13 +312,13 @@ int sam_hdr_add_lines(SAM_hdr *sh, const char *lines, int len) {
             return -1;
         }
 
-        type = (hdr[i+1]<<8) | hdr[i+2];
         if (hdr[i+1] < 'A' || hdr[i+1] > 'z' ||
             hdr[i+2] < 'A' || hdr[i+2] > 'z') {
             sam_hdr_error("Header line does not have a two character key",
                           &hdr[l_start], len - l_start, lno);
             return -1;
         }
+        type = (hdr[i+1]<<8) | hdr[i+2];
 
         i += 3;
         if (hdr[i] == '\n')

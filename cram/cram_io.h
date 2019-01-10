@@ -56,7 +56,7 @@ extern "C" {
  */
 
 /*! INTERNAL: Converts two characters into an integer for use in switch{} */
-#define CRAM_KEY(a,b) (((a)<<8)|((b)))
+#define CRAM_KEY(a,b) ((((unsigned char) (a))<<8)|((unsigned char)(b)))
 
 /*! Reads an integer in ITF-8 encoding from 'fd' and stores it in
  * *val.
@@ -94,8 +94,9 @@ static inline int itf8_get(char *cp, int32_t *val_p) {
  * Returns the number of bytes required to store the number.
  * This is a maximum of 5 bytes.
  */
-static inline int itf8_put(char *cp, int32_t val) {
+static inline int itf8_put(char *cp, int32_t ival) {
     unsigned char *up = (unsigned char *)cp;
+    uint32_t val = ival;
     if        (!(val & ~0x00000007f)) { // 1 byte
         *up = val;
         return 1;
@@ -126,8 +127,9 @@ static inline int itf8_put(char *cp, int32_t val) {
 
 
 /* 64-bit itf8 variant */
-static inline int ltf8_put(char *cp, int64_t val) {
+static inline int ltf8_put(char *cp, int64_t ival) {
     unsigned char *up = (unsigned char *)cp;
+    uint64_t val = ival;
     if        (!(val & ~((1LL<<7)-1))) {
         *up = val;
         return 1;

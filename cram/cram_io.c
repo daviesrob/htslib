@@ -379,17 +379,18 @@ int int32_get_blk(cram_block *b, int32_t *val) {
         return -1;
 
     *val =
-         b->data[b->byte  ]        |
-        (b->data[b->byte+1] <<  8) |
-        (b->data[b->byte+2] << 16) |
-        (b->data[b->byte+3] << 24);
+         (uint32_t) b->data[b->byte  ]        |
+        ((uint32_t) b->data[b->byte+1] <<  8) |
+        ((uint32_t) b->data[b->byte+2] << 16) |
+        ((uint32_t) b->data[b->byte+3] << 24);
     BLOCK_SIZE(b) += 4;
     return 4;
 }
 
 /* As int32_decoded/encode, but from/to blocks instead of cram_fd */
-int int32_put_blk(cram_block *b, int32_t val) {
+int int32_put_blk(cram_block *b, int32_t ival) {
     unsigned char cp[4];
+    uint32_t val = ival;
     cp[0] = ( val      & 0xff);
     cp[1] = ((val>>8)  & 0xff);
     cp[2] = ((val>>16) & 0xff);
