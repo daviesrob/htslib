@@ -73,7 +73,7 @@ typedef unsigned char uc;
  */
 typedef union {
     int i;
-    char *p;
+    unsigned char *p;
 } pmap_t;
 
 // Generates static functions here which isn't ideal, but we have no way

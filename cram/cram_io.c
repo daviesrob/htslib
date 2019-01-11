@@ -193,7 +193,7 @@ int itf8_decode_crc(cram_fd *fd, int32_t *val_p, uint32_t *crc) {
  *        -1 on failure
  */
 int itf8_encode(cram_fd *fd, int32_t val) {
-    char buf[5];
+    unsigned char buf[5];
     int len = itf8_put(buf, val);
     return hwrite(fd->fp, buf, len) == len ? 0 : -1;
 }
@@ -336,7 +336,7 @@ int ltf8_decode_crc(cram_fd *fd, int64_t *val_p, uint32_t *crc) {
  * Returns the number of bytes written
  */
 int itf8_put_blk(cram_block *blk, int val) {
-    char buf[5];
+    unsigned char buf[5];
     int sz;
 
     sz = itf8_put(buf, val);
@@ -737,9 +737,9 @@ uint32_t cram_block_size(cram_block *b) {
 
     *cp++ = b->method;
     *cp++ = b->content_type;
-    cp += itf8_put((char*)cp, b->content_id);
-    cp += itf8_put((char*)cp, b->comp_size);
-    cp += itf8_put((char*)cp, b->uncomp_size);
+    cp += itf8_put(cp, b->content_id);
+    cp += itf8_put(cp, b->comp_size);
+    cp += itf8_put(cp, b->uncomp_size);
 
     sz = cp-dat + 4;
     sz += b->method == RAW ? b->uncomp_size : b->comp_size;
@@ -780,9 +780,9 @@ int cram_write_block(cram_fd *fd, cram_block *b) {
 
         *cp++ = b->method;
         *cp++ = b->content_type;
-        cp += itf8_put((char*)cp, b->content_id);
-        cp += itf8_put((char*)cp, b->comp_size);
-        cp += itf8_put((char*)cp, b->uncomp_size);
+        cp += itf8_put(cp, b->content_id);
+        cp += itf8_put(cp, b->comp_size);
+        cp += itf8_put(cp, b->uncomp_size);
         crc = crc32(0L, dat, cp-dat);
 
         if (b->method == RAW) {
@@ -2856,36 +2856,36 @@ int cram_store_container(cram_fd *fd, cram_container *c, char *dat, int *size)
         return -1;
 
     if (CRAM_MAJOR_VERS(fd->version) == 1) {
-        cp += itf8_put((char*)cp, c->length);
+        cp += itf8_put(cp, c->length);
     } else {
         *(int32_t *)cp = le_int4(c->length);
         cp += 4;
     }
     if (c->multi_seq) {
-        cp += itf8_put((char*)cp, -2);
-        cp += itf8_put((char*)cp, 0);
-        cp += itf8_put((char*)cp, 0);
+        cp += itf8_put(cp, -2);
+        cp += itf8_put(cp, 0);
+        cp += itf8_put(cp, 0);
     } else {
-        cp += itf8_put((char*)cp, c->ref_seq_id);
-        cp += itf8_put((char*)cp, c->ref_seq_start);
-        cp += itf8_put((char*)cp, c->ref_seq_span);
+        cp += itf8_put(cp, c->ref_seq_id);
+        cp += itf8_put(cp, c->ref_seq_start);
+        cp += itf8_put(cp, c->ref_seq_span);
     }
-    cp += itf8_put((char*)cp, c->num_records);
+    cp += itf8_put(cp, c->num_records);
     if (CRAM_MAJOR_VERS(fd->version) == 2) {
-        cp += itf8_put((char*)cp, c->record_counter);
-        cp += ltf8_put((char*)cp, c->num_bases);
+        cp += itf8_put(cp, c->record_counter);
+        cp += ltf8_put(cp, c->num_bases);
     } else if (CRAM_MAJOR_VERS(fd->version) >= 3) {
-        cp += ltf8_put((char*)cp, c->record_counter);
-        cp += ltf8_put((char*)cp, c->num_bases);
+        cp += ltf8_put(cp, c->record_counter);
+        cp += ltf8_put(cp, c->num_bases);
     }
 
-    cp += itf8_put((char*)cp, c->num_blocks);
-    cp += itf8_put((char*)cp, c->num_landmarks);
+    cp += itf8_put(cp, c->num_blocks);
+    cp += itf8_put(cp, c->num_landmarks);
     for (i = 0; i < c->num_landmarks; i++)
-        cp += itf8_put((char*)cp, c->landmark[i]);
+        cp += itf8_put(cp, c->landmark[i]);
 
     if (CRAM_MAJOR_VERS(fd->version) >= 3) {
-        c->crc32 = crc32(0L, (uc *)dat, (char*)cp-dat);
+        c->crc32 = crc32(0L, (uc *) dat, (char *) cp-dat);
         cp[0] =  c->crc32        & 0xff;
         cp[1] = (c->crc32 >>  8) & 0xff;
         cp[2] = (c->crc32 >> 16) & 0xff;
@@ -2906,45 +2906,45 @@ int cram_store_container(cram_fd *fd, cram_container *c, char *dat, int *size)
  *        -1 on failure
  */
 int cram_write_container(cram_fd *fd, cram_container *c) {
-    char buf_a[1024], *buf = buf_a;
+    unsigned char buf_a[1024], *buf = buf_a;
     unsigned char *cp;
     int i;
 
     if (55 + c->num_landmarks * 5 >= 1024)
         buf = malloc(55 + c->num_landmarks * 5);
-    cp = (unsigned char *)buf;
+    cp = buf;
 
     if (CRAM_MAJOR_VERS(fd->version) == 1) {
-        cp += itf8_put((char*)cp, c->length);
+        cp += itf8_put(cp, c->length);
     } else {
         *(int32_t *)cp = le_int4(c->length);
         cp += 4;
     }
     if (c->multi_seq) {
-        cp += itf8_put((char*)cp, -2);
-        cp += itf8_put((char*)cp, 0);
-        cp += itf8_put((char*)cp, 0);
+        cp += itf8_put(cp, -2);
+        cp += itf8_put(cp, 0);
+        cp += itf8_put(cp, 0);
     } else {
-        cp += itf8_put((char*)cp, c->ref_seq_id);
-        cp += itf8_put((char*)cp, c->ref_seq_start);
-        cp += itf8_put((char*)cp, c->ref_seq_span);
+        cp += itf8_put(cp, c->ref_seq_id);
+        cp += itf8_put(cp, c->ref_seq_start);
+        cp += itf8_put(cp, c->ref_seq_span);
     }
-    cp += itf8_put((char*)cp, c->num_records);
+    cp += itf8_put(cp, c->num_records);
     if (CRAM_MAJOR_VERS(fd->version) == 2) {
-        cp += itf8_put((char*)cp, c->record_counter);
-        cp += ltf8_put((char*)cp, c->num_bases);
+        cp += itf8_put(cp, c->record_counter);
+        cp += ltf8_put(cp, c->num_bases);
     } else if (CRAM_MAJOR_VERS(fd->version) >= 3) {
-        cp += ltf8_put((char*)cp, c->record_counter);
-        cp += ltf8_put((char*)cp, c->num_bases);
+        cp += ltf8_put(cp, c->record_counter);
+        cp += ltf8_put(cp, c->num_bases);
     }
 
-    cp += itf8_put((char*)cp, c->num_blocks);
-    cp += itf8_put((char*)cp, c->num_landmarks);
+    cp += itf8_put(cp, c->num_blocks);
+    cp += itf8_put(cp, c->num_landmarks);
     for (i = 0; i < c->num_landmarks; i++)
-        cp += itf8_put((char*)cp, c->landmark[i]);
+        cp += itf8_put(cp, c->landmark[i]);
 
     if (CRAM_MAJOR_VERS(fd->version) >= 3) {
-        c->crc32 = crc32(0L, (uc *)buf, (char*)cp-buf);
+        c->crc32 = crc32(0L, buf, cp-buf);
         cp[0] =  c->crc32        & 0xff;
         cp[1] = (c->crc32 >>  8) & 0xff;
         cp[2] = (c->crc32 >> 16) & 0xff;
@@ -2952,7 +2952,7 @@ int cram_write_container(cram_fd *fd, cram_container *c) {
         cp += 4;
     }
 
-    if ((char*)cp-buf != hwrite(fd->fp, buf, (char*)cp-buf)) {
+    if (cp-buf != hwrite(fd->fp, buf, cp-buf)) {
         if (buf != buf_a)
             free(buf);
         return -1;

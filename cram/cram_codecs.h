@@ -116,9 +116,9 @@ typedef struct cram_codec {
     cram_block *out;
     void (*free)(struct cram_codec *codec);
     int (*decode)(cram_slice *slice, struct cram_codec *codec,
-                  cram_block *in, char *out, int *out_size);
+                  cram_block *in, void *out, int *out_size);
     int (*encode)(cram_slice *slice, struct cram_codec *codec,
-                  char *in, int in_size);
+                  void *in, int in_size);
     int (*store)(struct cram_codec *codec, cram_block *b, char *prefix,
                  int version);
 
@@ -144,7 +144,8 @@ typedef struct cram_codec {
 
 const char *cram_encoding2str(enum cram_encoding t);
 
-cram_codec *cram_decoder_init(enum cram_encoding codec, char *data, int size,
+cram_codec *cram_decoder_init(enum cram_encoding codec,
+                              unsigned char *data, int size,
                               enum cram_external_type option,
                               int version);
 cram_codec *cram_encoder_init(enum cram_encoding codec, cram_stats *st,

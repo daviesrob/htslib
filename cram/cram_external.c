@@ -324,9 +324,9 @@ int cram_transcode_rg(cram_fd *in, cram_fd *out,
      * byte blank segment.  This means n_blk is too short.  We skip
      * through the decoded old block (o_blk) and copy from there.
      */
-    char *cp = cram_block_get_data(o_blk);
-    char *op = cp;
-    char *endp = cp + cram_block_get_uncomp_size(o_blk);
+    unsigned char *cp = cram_block_get_data(o_blk);
+    unsigned char *op = cp;
+    unsigned char *endp = cp + cram_block_get_uncomp_size(o_blk);
     //fprintf(stderr, "sz = %d\n", (int)(endp-cp));
     int32_t i32;
 

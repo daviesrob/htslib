@@ -67,9 +67,7 @@ extern "C" {
  */
 int itf8_decode(cram_fd *fd, int32_t *val);
 
-static inline int itf8_get(char *cp, int32_t *val_p) {
-    unsigned char *up = (unsigned char *)cp;
-
+static inline int itf8_get(unsigned char *up, int32_t *val_p) {
     if (up[0] < 0x80) {
         *val_p =   up[0];
         return 1;
@@ -83,7 +81,7 @@ static inline int itf8_get(char *cp, int32_t *val_p) {
         *val_p = ((up[0]<<24) | (up[1]<<16) | (up[2]<<8) | up[3]) & 0x0fffffff;
         return 4;
     } else {
-        *val_p = ((up[0] & 0x0f)<<28) | (up[1]<<20) | (up[2]<<12) | (up[3]<<4) | (up[4] & 0x0f);
+        *val_p = (((uint32_t) up[0] & 0x0f)<<28) | (up[1]<<20) | (up[2]<<12) | (up[3]<<4) | (up[4] & 0x0f);
         return 5;
     }
 }
@@ -94,8 +92,7 @@ static inline int itf8_get(char *cp, int32_t *val_p) {
  * Returns the number of bytes required to store the number.
  * This is a maximum of 5 bytes.
  */
-static inline int itf8_put(char *cp, int32_t ival) {
-    unsigned char *up = (unsigned char *)cp;
+static inline int itf8_put(unsigned char *up, int32_t ival) {
     uint32_t val = ival;
     if        (!(val & ~0x00000007f)) { // 1 byte
         *up = val;
@@ -127,8 +124,7 @@ static inline int itf8_put(char *cp, int32_t ival) {
 
 
 /* 64-bit itf8 variant */
-static inline int ltf8_put(char *cp, int64_t ival) {
-    unsigned char *up = (unsigned char *)cp;
+static inline int ltf8_put(unsigned char *up, int64_t ival) {
     uint64_t val = ival;
     if        (!(val & ~((1LL<<7)-1))) {
         *up = val;
@@ -196,15 +192,13 @@ static inline int ltf8_put(char *cp, int64_t ival) {
     }
 }
 
-static inline int ltf8_get(char *cp, int64_t *val_p) {
-    unsigned char *up = (unsigned char *)cp;
-
+static inline int ltf8_get(unsigned char *up, int64_t *val_p) {
     if (up[0] < 0x80) {
         *val_p =   up[0];
         return 1;
     } else if (up[0] < 0xc0) {
-        *val_p = (((uint64_t)up[0]<< 8) |
-                   (uint64_t)up[1]) & (((1LL<<(6+8)))-1);
+        *val_p = ((up[0]<< 8) |
+                   up[1]) & (((1LL<<(6+8)))-1);
         return 2;
     } else if (up[0] < 0xe0) {
         *val_p = (((uint64_t)up[0]<<16) |
@@ -271,12 +265,11 @@ static inline int ltf8_get(char *cp, int64_t *val_p) {
 extern const int itf8_bytes[16];
 extern const int ltf8_bytes[256];
 
-static inline int safe_itf8_get(const char *cp, const char *endp,
+static inline int safe_itf8_get(const unsigned char *up,
+                                const unsigned char *endp,
                                 int32_t *val_p) {
-    const unsigned char *up = (unsigned char *)cp;
-
-    if (endp - cp < 5 &&
-        (cp >= endp || endp - cp < itf8_bytes[up[0]>>4])) {
+    if (endp - up < 5 &&
+        (up >= endp || endp - up < itf8_bytes[up[0]>>4])) {
         *val_p = 0;
         return 0;
     }
@@ -300,12 +293,11 @@ static inline int safe_itf8_get(const char *cp, const char *endp,
     }
 }
 
-static inline int safe_ltf8_get(const char *cp, const char *endp,
+static inline int safe_ltf8_get(const unsigned char *up,
+                                const unsigned char *endp,
                                 int64_t *val_p) {
-    unsigned char *up = (unsigned char *)cp;
-
-    if (endp - cp < 9 &&
-        (cp >= endp || endp - cp < ltf8_bytes[up[0]])) return 0;
+    if (endp - up < 9 &&
+        (up >= endp || endp - up < ltf8_bytes[up[0]])) return 0;
 
     if (up[0] < 0x80) {
         *val_p =   up[0];
