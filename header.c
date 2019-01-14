@@ -546,8 +546,11 @@ static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
     int i, lno;
     char *hdr;
 
-    if (!sh || !lines || len > SSIZE_MAX)
+    if (!sh || len > SSIZE_MAX)
         return -1;
+
+    if (!lines)
+        return 0;
 
     if (!len)
         len = strlen(lines);
