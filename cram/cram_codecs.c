@@ -697,6 +697,8 @@ int cram_subexp_decode(cram_slice *slice, cram_codec *c, cram_block *in,
          */
         if (i) {
             tail = i + k-1;
+            if (tail > 30) // Too big to fit
+                return -1;
             val = 0;
             while (tail) {
                 //val = val<<1; val |= get_bit_MSB(in);
@@ -747,7 +749,7 @@ cram_codec *cram_subexp_decode_init(unsigned char *data, int size,
     cp += safe_itf8_get(cp, data + size, &c->subexp.offset);
     cp += safe_itf8_get(cp, data + size, &c->subexp.k);
 
-    if (cp - data != size || c->subexp.k < 0) {
+    if (cp - data != size || c->subexp.k < 0 || c->subexp.k > 31) {
         hts_log_error("Malformed subexp header stream");
         free(c);
         return NULL;
@@ -770,7 +772,7 @@ int cram_gamma_decode(cram_slice *slice, cram_codec *c, cram_block *in,
         int val;
         //while (get_bit_MSB(in) == 0) nz++;
         nz = get_zero_bits_MSB(in);
-        if (cram_not_enough_bits(in, nz))
+        if (cram_not_enough_bits(in, nz) || nz > 30)
             return -1;
         val = 1;
         while (nz > 0) {
