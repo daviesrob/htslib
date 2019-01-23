@@ -367,7 +367,8 @@ bam1_t *bam_dup1(const bam1_t *bsrc)
     return bam_copy1(bdst, bsrc);
 }
 
-void bam_cigar2rqlens(int n_cigar, const uint32_t *cigar, int *rlen, int *qlen)
+void bam_cigar2rqlens(int n_cigar, const uint32_t *cigar,
+                      uint64_t *rlen, uint64_t *qlen)
 {
     int k;
     *rlen = *qlen = 0;
@@ -510,16 +511,16 @@ int bam_read1(BGZF *fp, bam1_t *b)
         return -4;
 
     if (c->n_cigar > 0) { // recompute "bin" and check CIGAR-qlen consistency
-        int rlen, qlen;
+        uint64_t rlen, qlen;
         bam_cigar2rqlens(c->n_cigar, bam_get_cigar(b), &rlen, &qlen);
-        if ((b->core.flag & BAM_FUNMAP)) rlen=1;
-        b->core.bin = hts_reg2bin(b->core.pos, b->core.pos + rlen, 14, 5);
         // Sanity check for broken CIGAR alignments
         if (c->l_qseq > 0 && !(c->flag & BAM_FUNMAP) && qlen != c->l_qseq) {
-            hts_log_error("CIGAR and query sequence lengths differ for %s",
+            hts_log_error("CIGAR and query sequence lengths differ for \"%s\"",
                     bam_get_qname(b));
             return -4;
         }
+        if ((b->core.flag & BAM_FUNMAP)) rlen=1;
+        b->core.bin = hts_reg2bin(b->core.pos, (int64_t) b->core.pos + rlen, 14, 5);
     }
 
     return 4 + block_len;
