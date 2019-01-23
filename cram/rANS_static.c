@@ -208,7 +208,7 @@ unsigned char *rans_uncompress_O0(unsigned char *in, unsigned int in_size,
     /* Load in the static tables */
     unsigned char *cp = in + 9;
     unsigned char *cp_end = in + in_size;
-    int i, j, x, rle;
+    unsigned int i, j, x, rle;
     unsigned int out_sz, in_sz;
     char *out_buf;
     ari_decoder D;
@@ -277,7 +277,7 @@ unsigned char *rans_uncompress_O0(unsigned char *in, unsigned int in_size,
     if (!out_buf)
         return NULL;
 
-    int out_end = (out_sz&~3);
+    unsigned int out_end = (out_sz&~3);
 
     RansState R[4];
     R[0] = rans0;
@@ -331,10 +331,14 @@ unsigned char *rans_uncompress_O0(unsigned char *in, unsigned int in_size,
             RansDecRenorm(&R[2], &ptr);
             RansDecRenorm(&R[3], &ptr);
         } else {
-            RansDecRenormSafe(&R[0], &ptr, cp_end);
-            RansDecRenormSafe(&R[1], &ptr, cp_end);
-            RansDecRenormSafe(&R[2], &ptr, cp_end);
-            RansDecRenormSafe(&R[3], &ptr, cp_end);
+            int e = RansDecRenormSafe(&R[0], &ptr, cp_end);
+            e |= RansDecRenormSafe(&R[1], &ptr, cp_end);
+            e |= RansDecRenormSafe(&R[2], &ptr, cp_end);
+            e |= RansDecRenormSafe(&R[3], &ptr, cp_end);
+            if (e) {
+                free(out_buf);
+                return NULL;
+            }
         }
     }
 
@@ -570,9 +574,9 @@ unsigned char *rans_uncompress_O1(unsigned char *in, unsigned int in_size,
     /* Load in the static tables */
     unsigned char *cp = in + 9;
     unsigned char *ptr_end = in + in_size;
-    int i, j = -999, x, rle_i, rle_j;
-    unsigned int out_sz, in_sz;
-    char *out_buf = NULL;
+    uint32_t i, j, x, rle_i, rle_j;
+    uint32_t out_sz, in_sz;
+    unsigned char *out_buf = NULL;
     ari_decoder *D = NULL;              /* D[256] */
     RansDecSymbol (*syms)[256] = NULL;  /* syms[256][256] */
 
@@ -608,7 +612,7 @@ unsigned char *rans_uncompress_O1(unsigned char *in, unsigned int in_size,
         rle_j = x = 0;
         j = *cp++;
         do {
-            int F, C;
+            uint32_t F, C;
             if (cp > ptr_end - 16) goto cleanup; // Not enough input bytes left
             if ((F = *cp++) >= 128) {
                 F &= ~128;
@@ -671,12 +675,12 @@ unsigned char *rans_uncompress_O1(unsigned char *in, unsigned int in_size,
     RansDecInit(&rans2, &ptr); if (rans2 < RANS_BYTE_L) goto cleanup;
     RansDecInit(&rans3, &ptr); if (rans3 < RANS_BYTE_L) goto cleanup;
 
-    int isz4 = out_sz>>2;
-    int l0 = 0;
-    int l1 = 0;
-    int l2 = 0;
-    int l3 = 0;
-    int i4[] = {0*isz4, 1*isz4, 2*isz4, 3*isz4};
+    uint32_t isz4 = out_sz>>2;
+    uint32_t l0 = 0;
+    uint32_t l1 = 0;
+    uint32_t l2 = 0;
+    uint32_t l3 = 0;
+    uint32_t i4[] = {0*isz4, 1*isz4, 2*isz4, 3*isz4};
 
     RansState R[4];
     R[0] = rans0;
@@ -724,10 +728,15 @@ unsigned char *rans_uncompress_O1(unsigned char *in, unsigned int in_size,
             RansDecRenorm(&R[2], &ptr);
             RansDecRenorm(&R[3], &ptr);
         } else {
-            RansDecRenormSafe(&R[0], &ptr, ptr_end);
-            RansDecRenormSafe(&R[1], &ptr, ptr_end);
-            RansDecRenormSafe(&R[2], &ptr, ptr_end);
-            RansDecRenormSafe(&R[3], &ptr, ptr_end);
+            int e = RansDecRenormSafe(&R[0], &ptr, ptr_end);
+            e |= RansDecRenormSafe(&R[1], &ptr, ptr_end);
+            e |= RansDecRenormSafe(&R[2], &ptr, ptr_end);
+            e |= RansDecRenormSafe(&R[3], &ptr, ptr_end);
+            if (e) {
+                free(out_buf);
+                out_buf = NULL;
+                goto cleanup;
+            }
         }
 
         l0 = c[0];
@@ -754,7 +763,7 @@ unsigned char *rans_uncompress_O1(unsigned char *in, unsigned int in_size,
         free(D);
     free(syms);
 
-    return (unsigned char *)out_buf;
+    return out_buf;
 }
 
 /*-----------------------------------------------------------------------------
