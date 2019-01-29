@@ -171,9 +171,11 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
 
     // read reference sequence names and lengths
     if (h->n_targets > 0) {
-        h->target_name = (char**)calloc(h->n_targets, sizeof(char*));
+        if ((size_t) h->n_targets >= SIZE_MAX / sizeof(char *))
+            goto nomem;
+        h->target_name = (char**)malloc(h->n_targets * sizeof(char*));
         if (!h->target_name) goto nomem;
-        h->target_len = (uint32_t*)calloc(h->n_targets, sizeof(uint32_t));
+        h->target_len = (uint32_t*)malloc(h->n_targets * sizeof(uint32_t));
         if (!h->target_len) goto nomem;
     }
     else {
