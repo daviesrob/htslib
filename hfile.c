@@ -974,7 +974,9 @@ static void load_hfile_plugins()
     init_add_plugin(NULL, hfile_plugin_init_s3, "s3");
     init_add_plugin(NULL, hfile_plugin_init_s3_write, "s3w");
 #endif
-
+#ifdef ENABLE_HFILE_CRYPT4GH
+    init_add_plugin(NULL, hfile_plugin_init_crypt4gh, "crypt4gh");
+#endif
 #endif
 
     // In the unlikely event atexit() fails, it's better to succeed here and
@@ -1024,23 +1026,37 @@ static const struct hFILE_scheme_handler *find_scheme_handler(const char *s)
 hFILE *hopen(const char *fname, const char *mode, ...)
 {
     const struct hFILE_scheme_handler *handler = find_scheme_handler(fname);
+    hFILE *fp = NULL;
     if (handler) {
         if (strchr(mode, ':') == NULL
             || handler->priority < 2000
             || handler->vopen == NULL) {
-            return handler->open(fname, mode);
+            fp = handler->open(fname, mode);
         }
         else {
-            hFILE *fp;
             va_list arg;
             va_start(arg, mode);
             fp = handler->vopen(fname, mode, arg);
             va_end(arg);
-            return fp;
         }
     }
-    else if (strcmp(fname, "-") == 0) return hopen_fd_stdinout(mode);
-    else return hopen_fd(fname, mode);
+    else if (strcmp(fname, "-") == 0) fp = hopen_fd_stdinout(mode);
+    else fp = hopen_fd(fname, mode);
+#ifdef ENABLE_HFILE_CRYPT4GH
+    // Check for encrypted files
+    if (fp && strchr(mode, 'r') != NULL) {
+        char buffer[8];
+        char mode2[16] = { 0 };
+        ssize_t len = hpeek(fp, buffer, sizeof(buffer));
+        strncpy(mode2, mode, sizeof(mode2) - 2);
+        strcat(mode2, ":");
+        if (len == 8 && memcmp(buffer, "crypt4gh", 8) == 0) {
+            hFILE *fp2 = hopen("crypt4gh:", mode2, "parent", fp);
+            if (fp2) return fp2;
+        }
+    }
+#endif
+    return fp;
 }
 
 int hfile_always_local (const char *fname) { return 0; }

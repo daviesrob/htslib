@@ -136,6 +136,12 @@ AC_ARG_ENABLE([s3],
                   [support Amazon AWS S3 URLs])],
   [], [enable_s3=check])
 
+AC_ARG_ENABLE([hfile_crypt4gh],
+  [AS_HELP_STRING([--enable-hfile-crypt4gh],
+		  [enable experimental encrypted file support])],
+  [], [enable_hfile_crypt4gh=no])
+AC_SUBST(enable_hfile_crypt4gh)
+
 test -n "$host_alias" || host_alias=unknown-`uname -s`
 AC_MSG_CHECKING([shared library type for $host_alias])
 case $host_alias in
@@ -398,11 +404,28 @@ if test "$s3" = enabled ; then
    AC_DEFINE([ENABLE_S3], 1, [Define if HTSlib should enable S3 support.])
 fi
 
+AS_IF([test $enable_hfile_crypt4gh != no], [dnl
+  libsodium_devel=ok
+  AC_CHECK_HEADER([sodium.h], [], [libsodium_devel=missing], [;])
+  save_LIBS=$LIBS
+  AC_SEARCH_LIBS([sodium_version_string], [sodium],
+    [AC_DEFINE([HAVE_LIBSODIUM], 1, [Define if libsodium is present])
+     AS_IF([test "$ac_cv_search_sodium_version_string" != "none required"],
+           HFILE_CRYPT4GH_LIBS=$ac_cv_search_sodium_version_string)],
+    [libsodium_devel=missing])
+  LIBS=$save_LIBS
+  AS_IF([test $libsodium_devel != ok], [dnl
+    AC_MSG_ERROR([hfile_crypt4gh requires libsodium])
+  ])
+  AC_DEFINE([ENABLE_HFILE_CRYPT4GH], 1, [Define if hfile_crypt4gh enabled])
+])
+
 dnl Apply value from HTS_PROG_CC_WERROR (if set)
 AS_IF([test "x$hts_late_cflags" != x],[CFLAGS="$CFLAGS $hts_late_cflags"])
 
 AC_SUBST([s3])
 AC_SUBST([CRYPTO_LIBS])
+AC_SUBST([HFILE_CRYPT4GH_LIBS])
 
 AC_SUBST([pc_requires])
 AC_SUBST([private_LIBS])
