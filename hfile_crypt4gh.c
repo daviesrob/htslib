@@ -31,6 +31,8 @@ DEALINGS IN THE SOFTWARE.  */
 #include <ctype.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
@@ -40,6 +42,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include "htslib/hts_endian.h"
 #include "hts_internal.h"
 #include "hfile_internal.h"
+#include "crypto/crypt4gh_agent_defs.h"
 #include "crypto/sodium_if.h"
 #include "crypto/keyfile.h"
 #include "version.h"
@@ -130,170 +133,320 @@ static inline size_t get_mac_length(hFILE_crypt4gh *fp) {
     }
 }
 
+static int send_all(int fd, uint8_t *buffer, size_t len) {
+    ssize_t bytes;
+    size_t l = 0;
+    do {
+        do {
+            bytes = send(fd, buffer + l, len - l, 0);
+        } while (bytes < 0 && (errno == EINTR
+                               || errno == EWOULDBLOCK
+                               || errno == EAGAIN));
+        l += bytes >= 0 ? bytes : 0;
+    } while (bytes >= 0 && l < len);
+    return bytes >= 0 ? 0 : -1;
+}
 
-static int write_encryption_header(hFILE_crypt4gh *fp) {
-    uint8_t writer_pk[X25519_PK_LEN];
-    uint8_t reader_pk[X25519_PK_LEN] = { 0 };
-    uint8_t header_key[X25519_SESSION_LEN];
-    uint8_t header_iv[CC20_IV_LEN];
-    uint8_t tmp[4 + CC20_KEY_LEN];
-    uint8_t *p = fp->crypt_out;
-    char *fname;
-    size_t encrypt_len;
-    uint32_t header_len;
-    int retval = -1;
+static ssize_t recv_all(int fd, uint8_t *buffer, size_t len) {
+    ssize_t bytes;
+    size_t l = 0;
+    do {
+        do {
+            bytes = recv(fd, buffer + l, len - l, 0);
+        } while (bytes < 0 && (errno == EINTR
+                               || errno == EWOULDBLOCK
+                               || errno == EAGAIN));
+        l += bytes > 0 ? bytes : 0;
+    } while (bytes > 0 && l < len);
+    return bytes >= 0 ? l : -1;
+}
 
-    assert(fp->keylen <= CC20_KEY_LEN);
+static ssize_t get_message(int fd, uint8_t *buffer, size_t max_sz) {
+    uint8_t tmp[4];
+    uint32_t msg_len;
+    ssize_t bytes = recv_all(fd, tmp, sizeof(tmp));
+    if (bytes != sizeof(tmp)) return -1;
+    msg_len = le_to_u32(tmp);
+    if (msg_len > max_sz) return -1;
+    bytes = recv_all(fd, buffer, msg_len);
+    return bytes == msg_len ? bytes : -1;
+}
 
-    if ((fname = getenv("CRYPT4GH_PUBLIC")) != NULL) {
-        if (read_key_file(fname, reader_pk, sizeof(reader_pk)) != 0) return -1;
-    } else {
-        fprintf(stderr, "[E::%s] CRYPT4GH_PUBLIC not set\n", __func__);
+static int connect_agent(uint8_t rx[X25519_SESSION_LEN],
+                         uint8_t tx[X25519_SESSION_LEN],
+                         uint8_t iv[CC20_IV_LEN]) {
+    const char *agent = getenv("CRYPT4GH_AGENT");
+    struct sockaddr_un agent_addr;
+    uint8_t pk[X25519_PK_LEN], sk[X25519_SK_LEN];
+    uint8_t buffer[256];
+    int agent_fd = -1;
+
+    if (!agent) {
+        fprintf(stderr, "[E::%s] CRYPT4GH_AGENT not set\n", __func__);
+        errno = EIO;
         return -1;
     }
-    if (get_X25519_hdr_key_w(reader_pk, writer_pk, header_key) != 0) goto out;
-    get_random_bytes(header_iv, CC20_IV_LEN);
 
+    memset(&agent_addr, 0, sizeof(agent_addr));
+    agent_addr.sun_family = AF_UNIX;
+    strncpy(agent_addr.sun_path, agent, sizeof(agent_addr.sun_path) - 1);
+    if (strcmp(agent, agent_addr.sun_path) != 0) {
+        fprintf(stderr, "[E::%s] CRYPT4GH_AGENT path name too long\n",
+                __func__);
+        errno = EIO;
+        return -1;
+    }
+
+    agent_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (!agent_fd) {
+        fprintf(stderr, "[E::%s] Couldn't make agent socket : %s\n",
+                __func__, strerror(errno));
+        return -1;
+    }
+
+    if (connect(agent_fd, (const struct sockaddr *) &agent_addr,
+                sizeof(struct sockaddr_un)) != 0) {
+        fprintf(stderr, "[E::%s] Couldn't connect to agent : %s\n",
+                __func__, strerror(errno));
+        goto fail;
+    }
+
+    if (get_X25519_keypair(pk, sk) != 0) {
+        fprintf(stderr, "[E::%s] Couldn't generate X25519 key pair\n",
+                __func__);
+        goto fail;
+    }
+
+    u32_to_le(X25519_PK_LEN + 4, buffer);
+    u16_to_le(c4gh_msg_connect, buffer + 4);
+    u16_to_le(c4gh_proto_v_1, buffer + 6);
+    memcpy(buffer + 8, pk, X25519_PK_LEN);
+    if (send_all(agent_fd, buffer, X25519_PK_LEN + 8) != 0) goto fail;
+    if (get_message(agent_fd, buffer, sizeof(buffer)) < X25519_PK_LEN + 4)
+        goto fail;
+
+    if (le_to_u16(buffer) != c4gh_msg_connect
+        || le_to_u16(buffer + 2) != c4gh_proto_v_1) {
+        fprintf(stderr, "[E::%s] Unexpected reply from agent\n", __func__);
+        goto fail;
+    }
+    if (get_X25519_client_session_keys(rx, tx, pk, sk, buffer + 4) != 0) {
+        fprintf(stderr, "[E::%s] Couldn't generate session keys\n", __func__);
+        goto fail;
+    }
+    if (get_random_bytes(iv, CC20_IV_LEN) != 0) {
+        fprintf(stderr, "[E::%s] Couldn't generate session iv\n", __func__);
+        goto fail;
+    }
+    secure_zero(sk, sizeof(sk));
+    return agent_fd;
+
+ fail:
+    close(agent_fd);
+    secure_zero(sk, sizeof(sk));
+    secure_zero(rx, X25519_SESSION_LEN);
+    secure_zero(tx, X25519_SESSION_LEN);
+    return -1;
+}
+
+static int send_to_agent(int agent_fd, uint8_t *buffer, size_t sz,
+                         uint8_t tx[X25519_SESSION_LEN],
+                         uint8_t iv[CC20_IV_LEN]) {
+    uint8_t encrypted[256 + CC20_IV_LEN + P1305_MAC_LEN];
+    size_t encrypt_len;
+
+    if (sz > sizeof(encrypted) - 4 - CC20_IV_LEN - P1305_MAC_LEN) {
+        fprintf(stderr, "[E::%s] Message too long\n", __func__);
+        return -1;
+    }
+    memcpy(encrypted + 4, iv, CC20_IV_LEN);
+    if (chacha20_encrypt(encrypted + 4 + CC20_IV_LEN, &encrypt_len,
+                         buffer, sz, iv, tx) != 0) {
+        fprintf(stderr, "[E::%s] Encryption failed\n", __func__);
+        return -1;
+    }
+    constant_time_increment(iv, CC20_IV_LEN);
+    assert(encrypt_len == sz + P1305_MAC_LEN);
+    encrypt_len += CC20_IV_LEN;
+    u32_to_le(encrypt_len, encrypted);
+    if (send_all(agent_fd, encrypted, encrypt_len + 4) != 0)
+        return -1;
+    return 0;
+}
+
+static ssize_t read_from_agent(int agent_fd, uint8_t *buffer, size_t sz,
+                               uint8_t rx[X25519_SESSION_LEN]) {
+    uint8_t encrypted[256];
+    ssize_t len;
+    size_t decrypt_len;
+
+    if (sz > sizeof(encrypted)) {
+        fprintf(stderr, "[E::%s] Message too long\n", __func__);
+        return -1;
+    }
+
+    len = get_message(agent_fd, encrypted, sizeof(encrypted));
+    if (len < 0) {
+        fprintf(stderr, "[E::%s] No reply from agent\n", __func__);
+        return -1;
+    }
+    if (len < CC20_IV_LEN + P1305_MAC_LEN) {
+        fprintf(stderr, "[E::%s] Agent reply too short\n", __func__);
+        return -1;
+    }
+    if (chacha20_decrypt(buffer, &decrypt_len,
+                         encrypted + CC20_IV_LEN, len - CC20_IV_LEN,
+                         encrypted, rx) != 0) {
+        fprintf(stderr, "[E::%s] Failed to decrypt agent reply\n", __func__);
+        return -1;
+    }
+    return decrypt_len;
+}
+
+static int write_encryption_header(hFILE_crypt4gh *fp) {
+    char *pk_name = getenv("CRYPT4GH_PUBLIC");
+    size_t pk_name_len;
+    ssize_t len;
+    uint8_t rx[X25519_SESSION_LEN], tx[X25519_SESSION_LEN], iv[CC20_IV_LEN];
+    uint8_t buffer[128], *p = buffer;
+    int agent_fd = -1;
+
+    assert(fp->keylen <= CC20_KEY_LEN);
+    if (!pk_name) pk_name = "";
+    pk_name_len = strlen(pk_name) + 1;
+    if (pk_name_len + fp->keylen + 20 > sizeof(buffer)) {
+        fprintf(stderr, "[E::%s] CRYPT4GH_PUBLIC too long\n", __func__);
+        return -1;
+    }
+
+    agent_fd = connect_agent(rx, tx, iv);
+    if (agent_fd < 0) return -1;
+
+    u16_to_le(c4gh_msg_hdr_encrypt, p); p += 2;          // Agent protocol
+    u16_to_le(pk_name_len, p); p += 2;                   // PK name length
+    memcpy(p, pk_name, pk_name_len); p += pk_name_len;   // PK name
+
+    u32_to_le(1, p); p += 4;                             // Header version
+    u32_to_le(X25519_chacha20_ietf_poly1305, p); p += 4; // Header encryption
+    u32_to_le(chacha20_ietf_poly1305, p); p += 4;        // Data encryption
+    memcpy(p, fp->key, fp->keylen); p += fp->keylen;     // Data key
+
+    if (send_to_agent(agent_fd, buffer, p - buffer, tx, iv) != 0)
+        goto fail;
+
+    len = read_from_agent(agent_fd, buffer, sizeof(buffer), rx);
+    if (len < 2) goto fail;
+    if (le_to_u16(buffer) != c4gh_msg_hdr_encrypt) goto fail;
+
+    close(agent_fd);
+    secure_zero(rx, sizeof(rx));
+    secure_zero(tx, sizeof(tx));
+    secure_zero(iv, sizeof(iv));
+
+    p = fp->crypt_out;
     memcpy(p, MAGIC, 8); p += 8;
     u32_to_le(1, p); p += 4;
-    p += 4; // Fill header length in later
-    u32_to_le(X25519_chacha20_ietf_poly1305, p); p += 4;
-    memcpy(p, writer_pk, X25519_PK_LEN); p += X25519_PK_LEN;
-    memcpy(p, header_iv, CC20_IV_LEN); p += CC20_IV_LEN;
+    u32_to_le(len - 2, p); p += 4;
+    memcpy(p, buffer + 2, len - 2); p += len - 2;
+    fp->real_data_start = len - 2 + 16;
 
-    u32_to_le(chacha20_ietf_poly1305, tmp);
-    memcpy(tmp + 4, fp->key, fp->keylen);
-    if (chacha20_encrypt(p, &encrypt_len, tmp, 4 + fp->keylen,
-                         header_iv, header_key) != 0) {
-        goto out;
-    }
-    assert(encrypt_len == 4 + CC20_KEY_LEN + P1305_MAC_LEN);
-    header_len = 4 + X25519_PK_LEN + CC20_IV_LEN + encrypt_len;
-    fp->real_data_start = header_len + 16;
-    u32_to_le(header_len, fp->crypt_out + 12);
+    if (write_to_backend(fp, len - 2 + 16) != 0) return -1;
+    return 0;
 
-    if (write_to_backend(fp, header_len + 16) != 0) goto out;
-    retval = 0;
-
- out:
-    secure_zero(writer_pk, sizeof(writer_pk));
-    secure_zero(header_key, sizeof(header_key));
-    secure_zero(header_iv, sizeof(header_iv));
-    secure_zero(tmp, sizeof(tmp));
-    return retval;
+ fail:
+    close(agent_fd);
+    secure_zero(rx, sizeof(rx));
+    secure_zero(tx, sizeof(tx));
+    secure_zero(iv, sizeof(iv));
+    return -1;
 }
 
 static int read_encryption_header(hFILE_crypt4gh *fp) {
-    uint8_t bytes[128], tmp[128], *p;
-    uint8_t writer_pk[X25519_PK_LEN];
-    uint8_t header_key[X25519_SESSION_LEN];
-    uint8_t header_iv[CC20_IV_LEN];
-    uint8_t reader_pk[X25519_PK_LEN] = { 0 };
-    uint8_t reader_sk[X25519_SK_LEN] = { 0 };
-    char *fname;
+    const char *sk_name = getenv("CRYPT4GH_SECRET");
+    size_t sk_name_len;
+    uint8_t rx[X25519_SESSION_LEN], tx[X25519_SESSION_LEN], iv[CC20_IV_LEN];
+    uint8_t buffer[128];
     uint32_t hdr_len;
-    int retval = -1;
-    size_t decrypt_len = 0;
+    int agent_fd = -1;
 
-    if ((fname = getenv("CRYPT4GH_SECRET")) != NULL) {
-        if (read_key_file(fname, reader_sk, sizeof(reader_sk)) != 0) return -1;
-    } else {
-        fprintf(stderr, "[E::%s] CRYPT4GH_SECRET not set\n", __func__);
-        return -1;
-    }
+    assert(fp->key != NULL && fp->keylen >= CC20_KEY_LEN);
 
-    if (derive_X25519_public_key(reader_pk, reader_sk) != 0) {
-        fprintf(stderr, "[E::%s] Couldn't derive public key\n", __func__);
-        return -1;
-    }
+    if (!sk_name) sk_name = "";
+    sk_name_len = strlen(sk_name) + 1;
 
-    if (hread(fp->parent, bytes, 16) != 16) {
+    if (hread(fp->parent, buffer, 16) != 16) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Failed to read encryption magic number\n",
                     __func__);
         return -1;
     }
-    if (memcmp(bytes, MAGIC, 8) != 0) {
+    if (memcmp(buffer, MAGIC, 8) != 0) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Incorrect magic number\n",
                     __func__);
         return -1;
     }
-    if (le_to_u32(bytes + 8) != 1) {
+    if (le_to_u32(buffer + 8) != 1) {
         if (hts_verbose > 1)
             fprintf(stderr, "[E::%s] Incorrect version number\n",
                     __func__);
         return -1;
     }
-    hdr_len = le_to_u32(bytes + 12);
-    if (hdr_len > sizeof(bytes)) {
+    hdr_len = le_to_u32(buffer + 12);
+    if (hdr_len > sizeof(buffer) - 4) {
         if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Encrypted header too long (%u bytes)\n",
+            fprintf(stderr, "[E::%s] Encrypted header too long (%u buffer)\n",
                     __func__, (unsigned int) hdr_len);
         return -1;
     }
-    if (hdr_len < 4 + X25519_PK_LEN + CC20_IV_LEN) {
+
+    if (hdr_len + sk_name_len + 4 > sizeof(buffer)) {
         if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Encrypted header too short (%u bytes)\n",
-                    __func__, (unsigned int) hdr_len);
+            fprintf(stderr, "[E::%s] CRYPT4GH_SECRET too long\n",
+                    __func__);
         return -1;
     }
+
+    agent_fd = connect_agent(rx, tx, iv);
+    if (agent_fd < 0) return -1;
+
+    u16_to_le(c4gh_msg_hdr_decrypt, buffer);
+    u16_to_le(sk_name_len, buffer + 2);
+    memcpy(buffer + 4, sk_name, sk_name_len);
+    if (hread(fp->parent, buffer + 4 + sk_name_len, hdr_len) != hdr_len) {
+        if (hts_verbose > 1)
+            fprintf(stderr, "[E::%s] Failed to read header\n",
+                    __func__);
+        goto fail;
+    }
+    if (send_to_agent(agent_fd, buffer, 4 + sk_name_len + hdr_len,
+                       tx, iv) != 0) {
+        goto fail;
+    }
+    if (read_from_agent(agent_fd,
+                        buffer, sizeof(buffer), rx) != CC20_KEY_LEN + 6) {
+        goto fail;
+    }
+    if (le_to_u16(buffer) != c4gh_msg_hdr_decrypt) goto fail;
+    if (le_to_u32(buffer + 2) != chacha20_ietf_poly1305) goto fail;
+    memcpy(fp->key, buffer + 6, CC20_KEY_LEN);
     fp->real_data_start = hdr_len + 16;
 
-    if (hread(fp->parent, bytes, hdr_len) != hdr_len) {
-        if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Failed to read encryption header\n",
-                    __func__);
-        return -1;
-    }
+    close(agent_fd);
+    secure_zero(rx, sizeof(rx));
+    secure_zero(tx, sizeof(tx));
+    secure_zero(iv, sizeof(iv));
+    secure_zero(buffer, sizeof(buffer));
+    return 0;
 
-    p = bytes;
-    if (le_to_u32(bytes) != X25519_chacha20_ietf_poly1305) {
-        if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Unsupported header encryption method\n",
-                    __func__);
-        return -1;
-    }
-    p += 4;
-
-    memcpy(writer_pk, p, X25519_PK_LEN); p += X25519_PK_LEN;
-    memcpy(header_iv, p, CC20_IV_LEN); p += CC20_IV_LEN;
-
-    if (get_X25519_hdr_key_r(writer_pk, reader_pk, reader_sk, header_key) != 0) {
-        goto out;
-    }
-
-    if (chacha20_decrypt(tmp, &decrypt_len, p,
-                         hdr_len - 4 - X25519_PK_LEN - CC20_IV_LEN,
-                         header_iv, header_key) != 0) {
-        goto out;
-    }
-    if (decrypt_len < 4 + CC20_KEY_LEN) {
-        if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Encrypted header too short\n",
-                    __func__);
-        goto out;
-    }
-
-    if (le_to_u32(tmp) != chacha20_ietf_poly1305) {
-        if (hts_verbose > 1)
-            fprintf(stderr, "[E::%s] Unsupported file encyption method\n",
-                    __func__);
-        goto out;
-    }
-
-    memcpy(fp->key, tmp + 4, CC20_KEY_LEN);
-    retval = 0;
-
- out:
-    secure_zero(reader_sk, sizeof(reader_sk));
-    secure_zero(header_key, sizeof(header_key));
-    secure_zero(header_iv, sizeof(header_iv));
-    secure_zero(bytes, sizeof(bytes));
-    secure_zero(tmp, sizeof(tmp));
-    return retval;
+ fail:
+    close(agent_fd);
+    secure_zero(rx, sizeof(rx));
+    secure_zero(tx, sizeof(tx));
+    secure_zero(iv, sizeof(iv));
+    secure_zero(buffer, sizeof(buffer));
+    return 0;
 }
-
 
 static ssize_t crypt4gh_read(hFILE *fpv, void *buffer, size_t nbytes) {
     hFILE_crypt4gh *fp = (hFILE_crypt4gh *) fpv;
@@ -302,6 +455,7 @@ static ssize_t crypt4gh_read(hFILE *fpv, void *buffer, size_t nbytes) {
     // Need to adjust fp->base.offset by the number of bytes already read
     // from the buffer to find the true file position
     off_t offset = fp->base.offset + (fp->base.end - fp->base.buffer);
+    off_t orig_offset = offset;
     // Find out how much data is available in the current block
     off_t available = ((offset >= fp->curr_offset
                         && offset - fp->curr_offset < fp->crypt_buf_used)
@@ -342,6 +496,7 @@ static ssize_t crypt4gh_read(hFILE *fpv, void *buffer, size_t nbytes) {
             }
             assert(decrypt_len <= CRYPTO_BLOCK_LENGTH);
             fp->crypt_buf_used = decrypt_len;
+            offset = orig_offset + i; // Account for data already read
             available = offset - fp->curr_offset < decrypt_len ? decrypt_len : 0;
         }
 

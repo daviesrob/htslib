@@ -301,12 +301,14 @@ int decrypt_crypt4gh_key(uint8_t *data, size_t data_len,
     return res;
 }
 
-int read_key_file(const char *fname, uint8_t *key_out, size_t key_len) {
+int read_key_file(const char *fname, uint8_t *key_out, size_t key_len,
+                  int *is_public_out) {
     char buffer[80], *c;
     FILE *kf;
     uint8_t *data;
     size_t data_len;
     int res = 0;
+    int is_public = 0;
     if (!fname) {
         fprintf(stderr, "[%s] No filename given\n", __func__);
         return -1;
@@ -324,7 +326,8 @@ int read_key_file(const char *fname, uint8_t *key_out, size_t key_len) {
     }
     if ((c = strrchr(buffer, '\n')) != NULL) *c = '\0';
     if (c && c > buffer && *(c - 1) == '\r') *(c - 1) = '\0';
-    if (strcmp(buffer, "-----BEGIN CRYPT4GH PUBLIC KEY-----") == 0 ||
+    is_public = (strcmp(buffer, "-----BEGIN CRYPT4GH PUBLIC KEY-----") == 0);
+    if (is_public ||
         strcmp(buffer, "-----BEGIN CRYPT4GH PRIVATE KEY-----") == 0) {
         res = get_base64_wrapped_data(fname, kf, &data, &data_len);
         if (res == 0) {
@@ -354,5 +357,6 @@ int read_key_file(const char *fname, uint8_t *key_out, size_t key_len) {
                 fname, strerror(errno));
         res = -1;
     }
+    if (res == 0 && is_public_out) *is_public_out = is_public;
     return res;
 }

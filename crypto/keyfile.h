@@ -28,6 +28,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <stdint.h>
 #include <stdlib.h>
 
-int read_key_file(const char *fname, uint8_t *key_out, size_t key_len);
+int read_key_file(const char *fname, uint8_t *key_out, size_t key_len,
+                  int *is_public_out);
 
 #endif /* CRYPTO_KEYFILE_H */

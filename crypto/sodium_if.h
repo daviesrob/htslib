@@ -57,6 +57,16 @@ static inline void secure_zero(void *ptr, size_t len) {
     sodium_memzero(ptr, len);
 }
 
+/// Increment an arbitrary-length number in constant time
+/** @param buf    Buffer containing number
+    @param len    Length
+
+The number is incremented as if little-endian.
+*/
+static inline void constant_time_increment(uint8_t *buf, size_t len) {
+    sodium_increment(buf, len);
+}
+
 /// Get cryptographically-secure random bytes
 /** @param[out] buf    Location to store random bytes
     @param      len    Number of bytes to generate
@@ -71,20 +81,73 @@ static inline int get_random_bytes(uint8_t *buf, size_t len) {
     @param[in]   secret_in     Secret key
     @return 0 on success; non-zero on failure
 */
-static inline int derive_X25519_public_key(uint8_t public_out[X25519_PK_LEN],
-                                           uint8_t secret_in[X25519_SK_LEN]) {
+static inline
+int derive_X25519_public_key(uint8_t public_out[X25519_PK_LEN],
+                             const uint8_t secret_in[X25519_SK_LEN]) {
     return crypto_scalarmult_base(public_out, secret_in);
+}
+
+/// Get an X25519 key pair
+/** @param[out] pk    Generated public key
+    @param[out] sk    Generated secret key
+    @return 0 on success; non-zero on failure
+*/
+static inline int get_X25519_keypair(uint8_t pk[X25519_PK_LEN],
+                                     uint8_t sk[X25519_SK_LEN]) {
+    if (crypto_kx_keypair(pk, sk) != 0) return -1;
+    return 0;
+}
+
+/// Get X25519 server session keys
+/** @param[out]    rx   Recieve session key
+    @param[out]    tx   Transmit session key
+    @param[in]     server_pk  Server's public key
+    @param[in]     server_sk  Server's secret key
+    @param[in]     client_pk  Client's public key
+*/
+static inline
+int get_X25519_server_session_keys(uint8_t rx[X25519_SESSION_LEN],
+                                   uint8_t tx[X25519_SESSION_LEN],
+                                   const uint8_t server_pk[X25519_PK_LEN],
+                                   const uint8_t server_sk[X25519_PK_LEN],
+                                   const uint8_t client_pk[X25519_PK_LEN]) {
+    if (crypto_kx_server_session_keys(rx, tx,
+                                      server_pk, server_sk, client_pk) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/// Get X25519 client session keys
+/** @param[out]    rx   Recieve session key
+    @param[out]    tx   Transmit session key
+    @param[in]     client_pk  Client's public key
+    @param[in]     client_sk  Client's secret key
+    @param[in]     server_pk  Server's public key
+*/
+static inline
+int get_X25519_client_session_keys(uint8_t rx[X25519_SESSION_LEN],
+                                   uint8_t tx[X25519_SESSION_LEN],
+                                   const uint8_t client_pk[X25519_PK_LEN],
+                                   const uint8_t client_sk[X25519_PK_LEN],
+                                   const uint8_t server_pk[X25519_PK_LEN]) {
+    if (crypto_kx_client_session_keys(rx, tx,
+                                      client_pk, client_sk, server_pk) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 /// Get an X25519 session key (for writing)
 /** @param      reader_pk    Reader's public key
-    @param      writer_pk    Writer's public key
+    @param[out] writer_pk    Writer's public key
     @param[out] session_key  Derived session key
     @return 0 on success; non-zero on failure
 */
-static inline int get_X25519_hdr_key_w(uint8_t reader_pk[X25519_PK_LEN],
-                                       uint8_t writer_pk[X25519_PK_LEN],
-                                       uint8_t session_key[X25519_SESSION_LEN]) {
+static inline
+int get_X25519_hdr_key_w(const uint8_t reader_pk[X25519_PK_LEN],
+                         uint8_t writer_pk[X25519_PK_LEN],
+                         uint8_t session_key[X25519_SESSION_LEN]) {
     uint8_t writer_sk[X25519_SK_LEN];
     uint8_t ignored[X25519_SESSION_LEN];
     int retval = -1;
@@ -109,10 +172,11 @@ static inline int get_X25519_hdr_key_w(uint8_t reader_pk[X25519_PK_LEN],
     @param[out] session_key  Derived session key
     @return 0 on success; non-zero on failure
 */
-static inline int get_X25519_hdr_key_r(uint8_t writer_pk[X25519_PK_LEN],
-                                       uint8_t reader_pk[X25519_PK_LEN],
-                                       uint8_t reader_sk[X25519_PK_LEN],
-                                       uint8_t session_key[X25519_SESSION_LEN]) {
+static inline
+int get_X25519_hdr_key_r(const uint8_t writer_pk[X25519_PK_LEN],
+                         const uint8_t reader_pk[X25519_PK_LEN],
+                         const uint8_t reader_sk[X25519_PK_LEN],
+                         uint8_t session_key[X25519_SESSION_LEN]) {
     uint8_t ignored[X25519_SESSION_LEN];
 
     if (crypto_kx_client_session_keys(session_key, ignored,
@@ -134,8 +198,8 @@ static inline int get_X25519_hdr_key_r(uint8_t writer_pk[X25519_PK_LEN],
     @return 0 on success; non-zero on failure
  */
 static inline int chacha20_encrypt(uint8_t *out, size_t *out_len,
-                                   uint8_t *msg, size_t msg_len,
-                                   uint8_t *iv, uint8_t *key) {
+                                   const uint8_t *msg, size_t msg_len,
+                                   const uint8_t *iv, const uint8_t *key) {
     unsigned long long len = 0;
     int ret = crypto_aead_chacha20poly1305_ietf_encrypt(out, &len,
                                                         msg, msg_len,
@@ -155,8 +219,8 @@ static inline int chacha20_encrypt(uint8_t *out, size_t *out_len,
     @return 0 on success; non-zero on failure
  */
 static inline int chacha20_decrypt(uint8_t *out, size_t *out_len,
-                                   uint8_t *in, size_t in_len,
-                                   uint8_t *iv, uint8_t *key) {
+                                   const uint8_t *in, size_t in_len,
+                                   const uint8_t *iv, const uint8_t *key) {
     unsigned long long len = 0;
     int ret = crypto_aead_chacha20poly1305_ietf_decrypt(out, &len, NULL,
                                                         in, in_len,
@@ -176,8 +240,8 @@ static inline int chacha20_decrypt(uint8_t *out, size_t *out_len,
     @return 0 on success; non-zero on failure
 */
 static inline int salsa_kdf(uint8_t *key_out, size_t key_len,
-                            uint8_t *passwd, size_t passwd_len,
-                            uint8_t *salt, size_t salt_len) {
+                            const uint8_t *passwd, size_t passwd_len,
+                            const uint8_t *salt, size_t salt_len) {
     if (crypto_pwhash_scryptsalsa208sha256_ll(passwd, passwd_len,
                                               salt, salt_len,
                                               1<<14, 8, 1,
