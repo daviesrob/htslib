@@ -662,8 +662,9 @@ static int run_server(Agent_settings *settings) {
 }
 
 static int import_key(Agent_settings *settings, const char *key_name,
-               const char *key_file) {
-    Key_info *keys = realloc(settings->keys, settings->nkeys + 1);
+                      const char *key_file) {
+    Key_info *keys = realloc(settings->keys,
+                             (settings->nkeys + 1) * sizeof(*keys));
     Key_info *key;
     uint8_t *k = NULL;
     int is_public = 0;
@@ -690,18 +691,84 @@ static int import_key(Agent_settings *settings, const char *key_name,
     return -1;
 }
 
+static int gen_key_pair(Agent_settings *settings, const char *key_name,
+                        const char *key_file) {
+    Key_info *keys = NULL;
+    uint8_t *pk = NULL, *sk = NULL;
+    char *fname = NULL, *pk_name = NULL, *sk_name = NULL;
+    size_t key_file_len;
+
+    if (key_file == NULL || *key_file == '\0')
+        return -1;
+    key_file_len = strlen(key_file);
+
+    keys = realloc(settings->keys, (settings->nkeys + 2) * sizeof(*keys));
+    if (!keys) { perror(NULL); return -1; }
+    settings->keys = keys;
+
+    sk = malloc(X25519_SK_LEN);
+    if (!sk) goto fail;
+    pk = malloc(X25519_PK_LEN);
+    if (!pk) goto fail;
+    if (get_X25519_keypair(pk, sk) != 0) goto fail;
+
+    fname = malloc(key_file_len + 5);
+    if (!fname) goto fail;
+    snprintf(fname, key_file_len + 5, "%s.sec", key_file);
+    sk_name = key_name ? strdup(key_name) : strdup(fname);
+    if (!sk_name) goto fail;
+
+    if (write_key_file(fname, sk, X25519_SK_LEN, 0, 1) != 0)
+        goto fail;
+
+    snprintf(fname, key_file_len + 5, "%s.pub", key_file);
+    pk_name = key_name ? strdup(key_name) : strdup(fname);
+    if (!pk_name) goto fail;
+
+    if (write_key_file(fname, pk, X25519_PK_LEN, 1, 0) != 0)
+        goto fail;
+
+    keys[settings->nkeys].type = curve25519_public;
+    keys[settings->nkeys].key  = pk;
+    keys[settings->nkeys].name = pk_name;
+    settings->nkeys++;
+
+    keys[settings->nkeys].type = curve25519_secret;
+    keys[settings->nkeys].key  = sk;
+    keys[settings->nkeys].name = sk_name;
+    settings->nkeys++;
+
+    free(fname);
+    return 0;
+
+ fail:
+    free(fname);
+    secure_zero(sk, X25519_SK_LEN);
+    secure_zero(pk, X25519_PK_LEN);
+    free(sk);
+    free(pk);
+    free(sk_name);
+    free(pk_name);
+    return -1;
+}
+
 int main(int argc, char **argv) {
     Agent_settings settings = INIT_AGENT_SETTINGS;
     int opt;
     const char *key_name = NULL;
 
-    while ((opt = getopt(argc, argv, "n:k:")) != -1) {
+    while ((opt = getopt(argc, argv, "n:k:g:")) != -1) {
         switch (opt) {
         case 'n':
             key_name = optarg;
             break;
         case 'k':
             if (import_key(&settings, key_name, optarg) != 0)
+                return EXIT_FAILURE;
+            key_name = NULL;
+            break;
+        case 'g':
+            if (gen_key_pair(&settings, key_name, optarg) != 0)
                 return EXIT_FAILURE;
             key_name = NULL;
             break;

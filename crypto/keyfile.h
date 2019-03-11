@@ -31,4 +31,7 @@ DEALINGS IN THE SOFTWARE.  */
 int read_key_file(const char *fname, uint8_t *key_out, size_t key_len,
                   int *is_public_out);
 
+int write_key_file(const char *fname, uint8_t *key, size_t key_len,
+                   int is_public, int is_encrypted);
+
 #endif /* CRYPTO_KEYFILE_H */

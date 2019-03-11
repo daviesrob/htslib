@@ -36,6 +36,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <assert.h>
 
 #include "sodium_if.h"
 
@@ -183,6 +184,8 @@ int get_passphrase(const char *prompt, uint8_t **passwd_out, size_t *len_out) {
         goto fail;
     }
 
+    write(tty_fd, "\r\n", 2);
+
     while (len > 0 && (passwd[len - 1] == '\n' || passwd[len - 1] == '\r'))
         len--;
 
@@ -220,8 +223,8 @@ int get_passphrase(const char *prompt, uint8_t **passwd_out, size_t *len_out) {
     return -1;
 }
 
-int decrypt_crypt4gh_key(uint8_t *data, size_t data_len,
-                         uint8_t *key, size_t key_len) {
+static int decrypt_crypt4gh_key(uint8_t *data, size_t data_len,
+                                uint8_t *key, size_t key_len) {
     const char magic[] = "c4gh-v1";
     const size_t magic_len = sizeof(magic) - 1;
     const char kdfname[] = "scrypt";
@@ -301,6 +304,87 @@ int decrypt_crypt4gh_key(uint8_t *data, size_t data_len,
     return res;
 }
 
+static int encrypt_crypt4gh_key(uint8_t *key, size_t key_len,
+                                uint8_t **data_out, size_t *data_len_out) {
+    const char magic[] = "c4gh-v1";
+    const size_t magic_len = sizeof(magic) - 1;
+    const char kdfname[] = "scrypt";
+    const char ciphername[] = "chacha20_poly1305";
+    const size_t salt_len = 16;
+    const size_t iv_len = CC20_IV_LEN;
+    const size_t mac_len = P1305_MAC_LEN;
+    uint8_t *passwd = NULL, *passwd2 = NULL;
+    size_t passwd_len = 0, passwd_len2 = 0;
+    uint8_t hdr_key[CC20_KEY_LEN];
+    uint8_t *data = NULL, *d, *salt, *iv;
+    size_t data_len, encrypt_len;
+    int res = -1;
+
+    if (get_passphrase("Passphrase? ", &passwd, &passwd_len) != 0) goto out;
+    if (get_passphrase("Repeat passphrase? ", &passwd2, &passwd_len2) != 0)
+        goto out;
+    if (passwd_len != passwd_len2
+        || memcmp(passwd, passwd2, passwd_len) != 0) {
+        fprintf(stderr, "Passphrases don't match\n");
+        goto out;
+    }
+
+    data_len = (magic_len
+                + 2 + sizeof(kdfname) - 1
+                + 2 + 4 + salt_len
+                + 2 + sizeof(ciphername) - 1
+                + 2 + iv_len + key_len + mac_len
+                + 2);
+    data = malloc(data_len);
+    if (!data) goto out;
+    d = data;
+    // Magic
+    memcpy(d, magic, magic_len); d += magic_len;
+    // kdfname
+    *d++ = ((sizeof(kdfname) - 1) >> 8) & 0xff;
+    *d++ = ((sizeof(kdfname) - 1)     ) & 0xff;
+    memcpy(d, kdfname, sizeof(kdfname) - 1);
+    d += sizeof(kdfname) - 1;
+    // rounds and salt
+    *d++ = ((4 + salt_len) >> 8) & 0xff;
+    *d++ = ((4 + salt_len)     ) & 0xff;
+    memset(d, 0, 4); d += 4;
+    salt = d;
+    if (get_random_bytes(d, salt_len) < 0) goto out;
+    d += salt_len;
+    // ciphername
+    *d++ = ((sizeof(ciphername) - 1) >> 8) & 0xff;
+    *d++ = ((sizeof(ciphername) - 1)     ) & 0xff;
+    memcpy(d, ciphername, sizeof(ciphername) - 1); d += sizeof(ciphername) - 1;
+    // iv + encrypted data
+    *d++ = ((iv_len + key_len + mac_len) >> 8) & 0xff;
+    *d++ = ((iv_len + key_len + mac_len)     ) & 0xff;
+    iv = d;
+    if (get_random_bytes(d, iv_len) < 0) goto out;
+    d += iv_len;
+    if (salsa_kdf(hdr_key, sizeof(hdr_key),
+                  passwd, passwd_len, salt, salt_len) != 0)
+        goto out;
+    if (chacha20_encrypt(d, &encrypt_len, key, key_len, iv, hdr_key) != 0)
+        goto out;
+
+    d += encrypt_len;
+    // comment
+    *d++ = 0;
+    *d++ = 0;
+
+    assert(d - data == data_len);
+
+    *data_out = data;
+    *data_len_out = data_len;
+    res = 0;
+ out:
+    secure_zero(hdr_key, sizeof(hdr_key));
+    if (passwd)  { secure_zero(passwd,  passwd_len);  free(passwd);  }
+    if (passwd2) { secure_zero(passwd2, passwd_len2); free(passwd2); }
+    return res;
+}
+
 int read_key_file(const char *fname, uint8_t *key_out, size_t key_len,
                   int *is_public_out) {
     char buffer[80], *c;
@@ -359,4 +443,79 @@ int read_key_file(const char *fname, uint8_t *key_out, size_t key_len,
     }
     if (res == 0 && is_public_out) *is_public_out = is_public;
     return res;
+}
+
+int write_key_file(const char *fname, uint8_t *key, size_t key_len,
+                   int is_public, int is_encrypted) {
+    int fd;
+    FILE *kf = NULL;
+    const static char b64[65] = 
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        "ghijklmnopqrstuvwxyz0123456789+/";
+    size_t i = 0;
+    uint8_t *encrypted = NULL, *data = key;
+    size_t len = key_len;
+
+    fd = open(fname, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC,
+              is_public ? 0666 : 0600);
+    if (!fd) {
+        fprintf(stderr, "Couldn't open \"%s\" for writing : %s\n",
+                fname, strerror(errno));
+        return -1;
+    }
+    kf = fdopen(fd, "wb");
+    if (!kf) {
+        perror("fdopen");
+        close(fd);
+        goto fail;
+    }
+
+    if (is_encrypted) {
+        if (encrypt_crypt4gh_key(key, key_len, &encrypted, &len) != 0) {
+            fprintf(stderr, "Encryption failed\n");
+            goto fail;
+        }
+        data = encrypted;
+    }
+
+    fprintf(kf, "-----BEGIN CRYPT4GH %s%s KEY-----\n",
+            is_encrypted ? "ENCRYPTED " : "",
+            is_public ? "PUBLIC" : "PRIVATE");
+    for (i = 0; i + 2 < len; i += 3) {
+        putc(b64[(data[i] >> 2) & 0x3f], kf);
+        putc(b64[((data[i]     &   3) << 4) | ((data[i + 1] >> 4) & 0xf)], kf);
+        putc(b64[((data[i + 1] & 0xf) << 2) | ((data[i + 2] >> 6) &   3)], kf);
+        putc(b64[(data[i + 2] & 0x3f)], kf);
+    }
+    switch (len - i) {
+    case 1:
+        putc(b64[(data[i] >> 2) & 0x3f], kf);
+        putc(b64[(data[i] & 3) << 4], kf);
+        putc('=', kf);
+        putc('=', kf);
+        break;
+    case 2:
+        putc(b64[(data[i] >> 2) & 0x3f], kf);
+        putc(b64[((data[i] & 3) << 4) | ((data[i + 1] >> 4) & 0xf)], kf);
+        putc(b64[((data[i + 1] & 0xf) << 2)], kf);
+        putc('=', kf);
+        break;
+    default:
+        break;
+    }
+    fprintf(kf, "\n-----END CRYPT4GH %s%s KEY-----\n",
+            is_encrypted ? "ENCRYPTED " : "",
+            is_public ? "PUBLIC" : "PRIVATE");
+    if (fclose(kf) != 0) {
+        fprintf(stderr, "Error closing \"%s\" : %s\n", fname, strerror(errno));
+        goto fail;
+    }
+    free(encrypted);
+    return 0;
+
+ fail:
+    if (kf) fclose(kf);
+    unlink(fname);
+    free(encrypted);
+    return -1;
 }
