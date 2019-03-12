@@ -46,6 +46,13 @@ DEALINGS IN THE SOFTWARE.  */
 /// Length of X25519 session key
 #define X25519_SESSION_LEN crypto_kx_SESSIONKEYBYTES
 
+/// Initialize cryptographic functions
+/** @return 0 on success; non-zero on failure
+ */
+static inline int crypto_init() {
+    return sodium_init();
+}
+
 /// Securely zero out memory
 /** @param ptr    Memory to zero
     @param len    Length
@@ -55,6 +62,49 @@ returning from the calling function.
 */
 static inline void secure_zero(void *ptr, size_t len) {
     sodium_memzero(ptr, len);
+}
+
+/// Allocate mlock-ed memory
+/** @param count   Number of items to allocate
+    @param size    Size of item
+    @return pointer to allocated memory
+
+    Memory must be freed using secure_free()
+*/
+static inline void * secure_alloc(size_t count, size_t size) {
+    return sodium_allocarray(count, size);
+}
+
+/// Free mlock-ed memory
+/** @param  ptr    Location to free
+ */
+static inline void secure_free(void *ptr) {
+    sodium_free(ptr);
+}
+
+/// Make memory inaccessible
+/** @param ptr   Pointer to memory region allocated with secure_alloc
+    @return 0 on success; non-zero on error
+ */
+static inline int prevent_access(void *ptr) {
+    int ret = sodium_mprotect_noaccess(ptr);
+    if (ret != 0 && errno == ENOSYS) return 0;
+    return ret;
+}
+
+/// Make memory accessible
+/** @param ptr      Pointer to memory region allocated with secure_alloc
+    @param readonly Only allow reads
+    @return 0 on success; non-zero on error
+ */
+static inline int allow_access(void *ptr, int readonly) {
+    int ret;
+    if (readonly)
+        ret = sodium_mprotect_readonly(ptr);
+    else
+        ret = sodium_mprotect_readwrite(ptr);
+    if (ret != 0 && errno == ENOSYS) return 0;
+    return ret;
 }
 
 /// Increment an arbitrary-length number in constant time

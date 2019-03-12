@@ -63,10 +63,16 @@ typedef enum {
 } Key_type;
 
 typedef struct Key_info {
-    Key_type type;
-    const uint8_t *key;
-    const char    *name;
+    Key_type    type;
+    size_t      key_offset;
+    const char *name;
 } Key_info;
+
+typedef struct Mlocked_blob {
+    uint8_t *mem;
+    size_t used;
+    size_t sz;
+} Mlocked_blob;
 
 typedef struct Agent_settings {
     const char *sock_dir;
@@ -76,9 +82,13 @@ typedef struct Agent_settings {
     int chld_pid;
     size_t nkeys;
     Key_info *keys;
+    Mlocked_blob keystore;
+    Mlocked_blob scratch;
 } Agent_settings;
 
-#define INIT_AGENT_SETTINGS { NULL, NULL, -1, { -1, -1 }, -1, 0, NULL }
+#define INIT_AGENT_SETTINGS { \
+        NULL, NULL, -1, { -1, -1 }, -1, 0, NULL, { NULL, 0, 0 } \
+    }
 
 typedef enum {
     cs_waiting_peer_pk = 0,
@@ -106,6 +116,43 @@ typedef struct Client {
 //     4 + X25519_PK_LEN
 //     4 + CC20_IV_LEN + CC20_KEY_LEN + P1305_MAC_LEN
 #define MIN_WB_AVAIL (4 + CC20_IV_LEN + CC20_KEY_LEN + P1305_MAC_LEN + 16)
+
+static int init_key_store(Agent_settings *settings) {
+    const static size_t init_num_keys = 30;
+
+    settings->keystore.mem = secure_alloc(init_num_keys, X25519_PK_LEN);
+    if (!settings->keystore.mem) return -1;
+    settings->keystore.sz = init_num_keys * X25519_PK_LEN;
+    settings->keystore.used = 0;
+    if (prevent_access(settings->keystore.mem) != 0)
+        return -1;
+    return 0;
+}
+
+static int init_scratch(Agent_settings *settings) {
+    const static size_t scratch_size = 8192;
+    settings->scratch.mem = secure_alloc(scratch_size, 1);
+    if (!settings->scratch.mem) return -1;
+    settings->scratch.used = 0;
+    settings->scratch.sz = scratch_size;
+    return 0;
+}
+
+static inline void * get_scratch(Agent_settings *settings, size_t size) {
+    void *ptr;
+    if (settings->scratch.used + size > settings->scratch.sz)
+        return NULL;
+    ptr = settings->scratch.mem + settings->scratch.used;
+    settings->scratch.used += size;
+    return ptr;
+}
+
+static inline void free_scratch(Agent_settings *settings, size_t orig_used) {
+    if (settings->scratch.used <= orig_used) return;
+    secure_zero(settings->scratch.mem + orig_used,
+                settings->scratch.used - orig_used);
+    settings->scratch.used = orig_used;
+}
 
 static int sig_chld_fd;
 static void chld_sig_handler(int sig) {
@@ -227,6 +274,19 @@ void cleanup(Agent_settings *settings) {
     if (settings->sock_dir) {
         rmdir(settings->sock_dir);
         free((char *) settings->sock_dir);
+    }
+    if (settings->keystore.mem) {
+        if (settings->keystore.used > 0
+            && allow_access(settings->keystore.mem, 0) == 0) {
+            secure_zero(settings->keystore.mem, settings->keystore.used);
+        }
+        secure_free(settings->keystore.mem);
+    }
+    if (settings->scratch.mem) {
+        if (settings->scratch.used > 0) {
+            secure_zero(settings->scratch.mem, settings->scratch.used);
+        }
+        secure_free(settings->scratch.mem);
     }
 }
 
@@ -365,35 +425,45 @@ static int handle_header_decrypt(Agent_settings *settings, Client *c,
     size_t hdr_len;
     size_t key, decrypt_len = 0, encrypt_len;
     uint8_t reader_pk[X25519_PK_LEN];
-    uint8_t header_key[X25519_SESSION_LEN];
-    uint8_t decrypt[256];
+    uint8_t *header_key, *decrypt;
+    const size_t header_key_len = X25519_SESSION_LEN;
+    const size_t decrypt_size = 256;
+    size_t orig_scratch = settings->scratch.used;
 
-    if (msg_len < 4) return -1;
+    header_key = get_scratch(settings, header_key_len);
+    decrypt = get_scratch(settings, decrypt_size);
+    if (!header_key || !decrypt) goto fail;
+
+    if (msg_len < 4) goto fail;
     assert(le_to_u16(msg) == c4gh_msg_hdr_decrypt);
     name_len = le_to_u16(msg + 2);
     name = (char *) msg + 4;
-    if (name_len < 1 || name[name_len - 1] != '\0') return -1;
+    if (name_len < 1 || name[name_len - 1] != '\0') goto fail;
 
     hdr_len = msg_len - name_len - 4;
-    if (hdr_len < X25519_PK_LEN + CC20_IV_LEN + 4 + P1305_MAC_LEN) return -1;
+    if (hdr_len < X25519_PK_LEN + CC20_IV_LEN + 4 + P1305_MAC_LEN) goto fail;
     hdr = msg + 4 + name_len;
 
-    if (le_to_u32(hdr) != X25519_chacha20_ietf_poly1305) return -1;
+    if (le_to_u32(hdr) != X25519_chacha20_ietf_poly1305) goto fail;
     writer_pk = hdr + 4;
     header_iv = hdr + 4 + X25519_PK_LEN;
     encrypted = hdr + 4 + X25519_PK_LEN + CC20_IV_LEN;
-    if (hdr_len - (encrypted - hdr) - P1305_MAC_LEN > sizeof(decrypt) - 2)
-        return -1;
+    if (hdr_len - (encrypted - hdr) - P1305_MAC_LEN > decrypt_size - 2)
+        goto fail;
 
     u16_to_le(c4gh_msg_hdr_decrypt, decrypt);
 
+    if (allow_access(settings->keystore.mem, 1) != 0)
+        goto fail;
     for (key = 0; key < settings->nkeys; key++) {
+        uint8_t *k;
         if (*name && strcmp(name, settings->keys[key].name) != 0) continue;
         if (settings->keys[key].type != curve25519_secret) continue;
-        if (derive_X25519_public_key(reader_pk, settings->keys[key].key) != 0)
+        k = &settings->keystore.mem[settings->keys[key].key_offset];
+        if (derive_X25519_public_key(reader_pk, k) != 0)
             continue;
         if (get_X25519_hdr_key_r(writer_pk, reader_pk,
-                                 settings->keys[key].key, header_key) != 0)
+                                 k, header_key) != 0)
             continue;
         if (chacha20_decrypt(decrypt + 2, &decrypt_len, encrypted,
                              hdr_len - (encrypted - hdr),
@@ -401,8 +471,10 @@ static int handle_header_decrypt(Agent_settings *settings, Client *c,
             break;
         }
     }
-    secure_zero(header_key, sizeof(header_key));
-    if (key >= settings->nkeys) return -1;
+    if (prevent_access(settings->keystore.mem) != 0)
+        goto fail;
+    secure_zero(header_key, header_key_len);
+    if (key >= settings->nkeys) goto fail;
     if (decrypt_len < 4 + CC20_KEY_LEN) goto fail;
     if (le_to_u32(decrypt + 2) != chacha20_ietf_poly1305) goto fail;
     assert(6 + sizeof(c->txiv) + CC20_KEY_LEN + P1305_MAC_LEN
@@ -419,10 +491,10 @@ static int handle_header_decrypt(Agent_settings *settings, Client *c,
     u32_to_le(encrypt_len, c->wb + c->wb_out);
     c->wb_out += 4 + encrypt_len;
 
-    secure_zero(decrypt, sizeof(decrypt));
+    free_scratch(settings, orig_scratch);
     return 0;
  fail:
-    secure_zero(decrypt, sizeof(decrypt));
+    free_scratch(settings, orig_scratch);
     return -1;
 }
 
@@ -431,47 +503,61 @@ static int handle_header_encrypt(Agent_settings *settings, Client *c,
     char *name;
     uint16_t name_len;
     uint32_t hdr_version, hdr_encryption, data_encryption;
-    uint8_t writer_pk[X25519_PK_LEN];
-    uint8_t header_key[X25519_SESSION_LEN];
-    uint8_t header_iv[CC20_IV_LEN];
+    uint8_t *writer_pk, *header_key, *header_iv, *tmp, *decrypt;
+    const size_t tmp_len = 4 + CC20_KEY_LEN;
+    const size_t decrypt_len = 256;
     uint8_t *data_key;
-    uint8_t tmp[4 + CC20_KEY_LEN];
-    uint8_t decrypt[256], *p = decrypt;
+    uint8_t *p;
     size_t key, encrypt_len;
+    size_t orig_scratch = settings->scratch.used;
 
-    if (msg_len < 4) return -1;
+    writer_pk  = get_scratch(settings, X25519_PK_LEN);
+    header_key = get_scratch(settings, X25519_SESSION_LEN);
+    header_iv  = get_scratch(settings, CC20_IV_LEN);
+    tmp        = get_scratch(settings, tmp_len);
+    decrypt    = get_scratch(settings, decrypt_len);
+    p = decrypt;
+    if (!writer_pk || !header_key || !header_iv || !tmp || !decrypt)
+        goto fail;
+    
+    if (msg_len < 4) goto fail;
     assert(le_to_u16(msg) == c4gh_msg_hdr_encrypt);
     name_len = le_to_u16(msg + 2);
 
     name = (char *) msg + 4;
-    if (name_len < 1 || name[name_len - 1] != '\0') return -1;
+    if (name_len < 1 || name[name_len - 1] != '\0') goto fail;
 
-    if (msg_len < 4 + name_len + 12 + CC20_KEY_LEN) return -1;
+    if (msg_len < 4 + name_len + 12 + CC20_KEY_LEN) goto fail;
     hdr_version     = le_to_u32(msg + name_len + 4);
     hdr_encryption  = le_to_u32(msg + name_len + 8);
     data_encryption = le_to_u32(msg + name_len + 12);
     data_key = msg + name_len + 16;
 
     if (hdr_version != 1 || hdr_encryption != 0 || data_encryption != 0)
-        return -1;
+        goto fail;
 
+    if (allow_access(settings->keystore.mem, 1) != 0)
+        goto fail;
     for (key = 0; key < settings->nkeys; key++) {
+        uint8_t *k;
         if (*name && strcmp(name, settings->keys[key].name) != 0) continue;
         if (settings->keys[key].type != curve25519_public) continue;
-        if (get_X25519_hdr_key_w(settings->keys[key].key,
-                                 writer_pk, header_key) != 0) continue;
+        k = &settings->keystore.mem[settings->keys[key].key_offset];
+        if (get_X25519_hdr_key_w(k, writer_pk, header_key) != 0) continue;
         break;
     }
-    if (key >= settings->nkeys) return -1;
-    get_random_bytes(header_iv, sizeof(header_iv));
+    if (prevent_access(settings->keystore.mem) != 0)
+        goto fail;
+    if (key >= settings->nkeys) goto fail;
+    get_random_bytes(header_iv, CC20_IV_LEN);
 
-    assert(6 + sizeof(writer_pk) + sizeof(header_iv)
-           + 4 + CC20_KEY_LEN + P1305_MAC_LEN < sizeof(decrypt));
+    assert(6 + X25519_PK_LEN + CC20_IV_LEN
+           + 4 + CC20_KEY_LEN + P1305_MAC_LEN < decrypt_len);
 
     u16_to_le(c4gh_msg_hdr_encrypt, p); p += 2;
     u32_to_le(0, p); p += 4;
-    memcpy(p, writer_pk, sizeof(writer_pk)); p += sizeof(writer_pk);
-    memcpy(p, header_iv, sizeof(header_iv)); p += sizeof(header_iv);
+    memcpy(p, writer_pk, X25519_PK_LEN); p += X25519_PK_LEN;
+    memcpy(p, header_iv, CC20_IV_LEN); p += CC20_IV_LEN;
 
     u32_to_le(0, tmp);
     memcpy(tmp + 4, data_key, CC20_KEY_LEN);
@@ -495,33 +581,32 @@ static int handle_header_encrypt(Agent_settings *settings, Client *c,
     u32_to_le(encrypt_len, c->wb + c->wb_out);
     c->wb_out += 4 + encrypt_len;
 
-    secure_zero(decrypt, sizeof(decrypt));
-    secure_zero(writer_pk, sizeof(writer_pk));
-    secure_zero(header_key, sizeof(header_key));
-    secure_zero(header_iv, sizeof(header_iv));
-    secure_zero(tmp, sizeof(tmp));
+    free_scratch(settings, orig_scratch);
     return 0;
  fail:
-    secure_zero(decrypt, sizeof(decrypt));
-    secure_zero(writer_pk, sizeof(writer_pk));
-    secure_zero(header_key, sizeof(header_key));
-    secure_zero(header_iv, sizeof(header_iv));
-    secure_zero(tmp, sizeof(tmp));
+    free_scratch(settings, orig_scratch);
     return -1;
 }
 
 static int decrypt_and_process_message(Agent_settings *settings,
                                        Client *c, uint32_t msg_len) {
-    uint8_t decrypted[256];
+    uint8_t *decrypted;
+    const size_t decrypted_size = 256;
     size_t decrypted_len = 0;
-    if (msg_len > sizeof(decrypted) + CC20_IV_LEN + P1305_MAC_LEN) return -1;
+    size_t orig_scratch = settings->scratch.used;
+
+    if (msg_len > decrypted_size + CC20_IV_LEN + P1305_MAC_LEN) return -1;
     if (msg_len < CC20_IV_LEN + P1305_MAC_LEN) return -1;
+
+    decrypted = get_scratch(settings, decrypted_size);
+    if (!decrypted) goto fail;
+
     if (chacha20_decrypt(decrypted, &decrypted_len,
                          c->rb + 4 + CC20_IV_LEN, msg_len - CC20_IV_LEN,
                          c->rb + 4, c->rx) != 0) {
-        return -1;
+        goto fail;
     }
-    if (decrypted_len < 2) return -1;
+    if (decrypted_len < 2) goto fail;
     switch (le_to_u16(decrypted)) {
     case c4gh_msg_hdr_decrypt:
         if (handle_header_decrypt(settings, c, decrypted, decrypted_len) != 0)
@@ -534,10 +619,10 @@ static int decrypt_and_process_message(Agent_settings *settings,
     default:
         goto fail;
     }
-    secure_zero(decrypted, decrypted_len);
+    free_scratch(settings, orig_scratch);
     return 0;
  fail:
-    secure_zero(decrypted, decrypted_len);
+    free_scratch(settings, orig_scratch);
     return -1;
 }
 
@@ -665,28 +750,44 @@ static int import_key(Agent_settings *settings, const char *key_name,
                       const char *key_file) {
     Key_info *keys = realloc(settings->keys,
                              (settings->nkeys + 1) * sizeof(*keys));
-    Key_info *key;
-    uint8_t *k = NULL;
+    Key_info *key = NULL;
+    uint8_t *k = NULL, *tmp_k;
     int is_public = 0;
+    size_t orig_scratch = settings->scratch.used;
+
     if (!keys) { perror(NULL); return -1; }
+    if (settings->keystore.used + X25519_PK_LEN > settings->keystore.sz) {
+        fprintf(stderr, "Too many keys\n");
+        return -1;
+    }
+    tmp_k = get_scratch(settings, X25519_PK_LEN);
+    if (!tmp_k) goto fail;
+
     settings->keys = keys;
     key = &keys[settings->nkeys];
-    key->key = NULL;
     key->name = strdup(key_name ? key_name : key_file);
     if (!key->name) { perror(NULL); goto fail; }
-    k = malloc(X25519_PK_LEN);
-    if (!k) { perror(NULL); goto fail; }
-    key->key = k;
-    if (read_key_file(key_file, k, X25519_PK_LEN, &is_public) != 0)
+    
+    if (read_key_file(key_file, tmp_k, X25519_PK_LEN, &is_public) != 0)
         goto fail;
+    if (allow_access(settings->keystore.mem, 0) != 0)
+        goto fail;
+    k = settings->keystore.mem + settings->keystore.used;
+    key->key_offset = settings->keystore.used;
+    memcpy(k, tmp_k, X25519_PK_LEN);
+    settings->keystore.used += X25519_PK_LEN;
+    if (prevent_access(settings->keystore.mem) != 0)
+        goto fail;
+
     key->type = is_public ? curve25519_public : curve25519_secret;
     settings->nkeys++;
+    free_scratch(settings, orig_scratch);
     return 0;
 
  fail:
+    free_scratch(settings, orig_scratch);
     if (key) {
         free((char *) key->name);
-        free((uint8_t *) key->key);
     }
     return -1;
 }
@@ -694,9 +795,10 @@ static int import_key(Agent_settings *settings, const char *key_name,
 static int gen_key_pair(Agent_settings *settings, const char *key_name,
                         const char *key_file) {
     Key_info *keys = NULL;
-    uint8_t *pk = NULL, *sk = NULL;
+    uint8_t *pk, *sk, *k;
     char *fname = NULL, *pk_name = NULL, *sk_name = NULL;
     size_t key_file_len;
+    size_t orig_scratch = settings->scratch.used;
 
     if (key_file == NULL || *key_file == '\0')
         return -1;
@@ -706,10 +808,16 @@ static int gen_key_pair(Agent_settings *settings, const char *key_name,
     if (!keys) { perror(NULL); return -1; }
     settings->keys = keys;
 
-    sk = malloc(X25519_SK_LEN);
-    if (!sk) goto fail;
-    pk = malloc(X25519_PK_LEN);
-    if (!pk) goto fail;
+    if (settings->keystore.used
+        + X25519_PK_LEN + X25519_SK_LEN > settings->keystore.sz) {
+        fprintf(stderr, "Too many keys\n");
+        goto fail;
+    }
+
+    pk = get_scratch(settings, X25519_PK_LEN);
+    sk = get_scratch(settings, X25519_SK_LEN);
+    if (!pk || !sk) goto fail;
+
     if (get_X25519_keypair(pk, sk) != 0) goto fail;
 
     fname = malloc(key_file_len + 5);
@@ -728,25 +836,34 @@ static int gen_key_pair(Agent_settings *settings, const char *key_name,
     if (write_key_file(fname, pk, X25519_PK_LEN, 1, 0) != 0)
         goto fail;
 
-    keys[settings->nkeys].type = curve25519_public;
-    keys[settings->nkeys].key  = pk;
-    keys[settings->nkeys].name = pk_name;
-    settings->nkeys++;
+    if (allow_access(settings->keystore.mem, 0) != 0)
+        goto fail;
 
-    keys[settings->nkeys].type = curve25519_secret;
-    keys[settings->nkeys].key  = sk;
-    keys[settings->nkeys].name = sk_name;
+    k = settings->keystore.mem + settings->keystore.used;
+    memcpy(k, pk, X25519_PK_LEN);
+    keys[settings->nkeys].type       = curve25519_public;
+    keys[settings->nkeys].key_offset = settings->keystore.used;
+    keys[settings->nkeys].name       = pk_name;
     settings->nkeys++;
+    settings->keystore.used += X25519_PK_LEN;
 
+    k = settings->keystore.mem + settings->keystore.used;
+    memcpy(k, sk, X25519_SK_LEN);
+    keys[settings->nkeys].type       = curve25519_secret;
+    keys[settings->nkeys].key_offset = settings->keystore.used;
+    keys[settings->nkeys].name       = sk_name;
+    settings->nkeys++;
+    settings->keystore.used += X25519_PK_LEN;
+    if (prevent_access(settings->keystore.mem) != 0)
+        goto fail;
+
+    free_scratch(settings, orig_scratch);
     free(fname);
     return 0;
 
  fail:
+    free_scratch(settings, orig_scratch);
     free(fname);
-    secure_zero(sk, X25519_SK_LEN);
-    secure_zero(pk, X25519_PK_LEN);
-    free(sk);
-    free(pk);
     free(sk_name);
     free(pk_name);
     return -1;
@@ -756,6 +873,20 @@ int main(int argc, char **argv) {
     Agent_settings settings = INIT_AGENT_SETTINGS;
     int opt;
     const char *key_name = NULL;
+
+    if (crypto_init() != 0) {
+        fprintf(stderr, "Failed to initialize cryptographic functions\n");
+        return EXIT_FAILURE;
+    }
+
+    if (init_key_store(&settings) != 0) {
+        fprintf(stderr, "Failed to get memory for keys\n");
+        return EXIT_FAILURE;
+    }
+    if (init_scratch(&settings) != 0) {
+        fprintf(stderr, "Failed to get scratch memory\n");
+        return EXIT_FAILURE;
+    }
 
     while ((opt = getopt(argc, argv, "n:k:g:")) != -1) {
         switch (opt) {
