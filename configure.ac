@@ -417,6 +417,9 @@ AS_IF([test $enable_hfile_crypt4gh != no], [dnl
   AS_IF([test $libsodium_devel != ok], [dnl
     AC_MSG_ERROR([hfile_crypt4gh requires libsodium])
   ])
+  AS_IF([test "$enable_plugins" != yes], [dnl
+    static_LIBS="$static_LIBS $HFILE_CRYPT4GH_LIBS"
+  ])
   AC_DEFINE([ENABLE_HFILE_CRYPT4GH], 1, [Define if hfile_crypt4gh enabled])
 ])
 

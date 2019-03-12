@@ -84,9 +84,9 @@ endif
 
 ifeq "hfile_crypt4gh-@enable_hfile_crypt4gh@" "hfile_crypt4gh-yes"
 HFILE_CRYPT4GH_LIBS = @HFILE_CRYPT4GH_LIBS@
-plugin_OBJS += hfile_crypt4gh.o crypto/libhtscrypto.a
-hfile_crypt4gh$(PLUGIN_EXT): LIBS += crypto/libhtscrypto.a $(HFILE_CRYPT4GH_LIBS)
-noplugin_LIBS += crypto/libhtscrypto.a $(HFILE_CRYPT4GH_LIBS)
+plugin_OBJS += hfile_crypt4gh.o
+hfile_crypt4gh$(PLUGIN_EXT): LIBS += $(HFILE_CRYPT4GH_LIBS)
+noplugin_LIBS += $(HFILE_CRYPT4GH_LIBS)
 crypto/libhtscrypto.a: crypto/keyfile.pico
 	$(AR) -rc $@ crypto/keyfile.pico
 crypto/keyfile.pico: crypto/keyfile.c crypto/sodium_if.h config.h
