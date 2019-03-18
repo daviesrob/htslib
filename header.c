@@ -1878,3 +1878,11 @@ SAM_hdr *sam_hdr_parse_(const char *hdr, int len) {
 void sam_hdr_free(SAM_hdr *hdr) {
     bam_hdr_destroy(hdr);
 }
+
+int sam_hdr_length(SAM_hdr *hdr) {
+    return bam_hdr_length(hdr);
+}
+
+char *sam_hdr_str(SAM_hdr *hdr) {
+    return (char *) bam_hdr_str(hdr);
+}
