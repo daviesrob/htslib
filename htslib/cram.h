@@ -195,12 +195,6 @@ int cram_copy_slice(cram_fd *in, cram_fd *out, int32_t num_slice);
 
 /*
  *-----------------------------------------------------------------------------
- * SAM_hdr
- */
-
-
-/*
- *-----------------------------------------------------------------------------
  * cram_io basics
  */
 
@@ -417,6 +411,85 @@ int cram_check_EOF(cram_fd *fd);
 int int32_put_blk(cram_block *b, int32_t val);
 
 /**@}*/
+/**@{ -------------------------------------------------------------------*/
+
+typedef struct bam_hdr_t SAM_hdr;
+
+/*! Tokenises a SAM header into a hash table.
+ *
+ * Also extracts a few bits on specific data types, such as @RG lines.
+ *
+ * @return
+ * Returns a SAM_hdr struct on success (free with sam_hdr_free());
+ *         NULL on failure
+ */
+SAM_hdr *sam_hdr_parse_(const char *hdr, int len);
+
+/*! Deallocates all storage used by a SAM_hdr struct.
+ *
+ * This also decrements the header reference count. If after decrementing
+ * it is still non-zero then the header is assumed to be in use by another
+ * caller and the free is not done.
+ *
+ * This is a synonym for sam_hdr_dec_ref().
+ */
+void sam_hdr_free(SAM_hdr *hdr);
+
+/*! Returns the current length of the SAM_hdr in text form.
+ *
+ * Call sam_hdr_rebuild() first if editing has taken place.
+ */
+//int sam_hdr_length(SAM_hdr *hdr);
+
+/*! Returns the string form of the SAM_hdr.
+ *
+ * Call sam_hdr_rebuild() first if editing has taken place.
+ */
+//char *sam_hdr_str(SAM_hdr *hdr);
+
+/*! Appends a formatted line to an existing SAM header.
+ *
+ * Line is a full SAM header record, eg "@SQ\tSN:foo\tLN:100", with
+ * optional new-line. If it contains more than 1 line then multiple lines
+ * will be added in order.
+ *
+ * Len is the length of the text data, or 0 if unknown (in which case
+ * it should be null terminated).
+ *
+ * @return
+ * Returns 0 on success;
+ *        -1 on failure
+ */
+
+/*! Add an @PG line.
+ *
+ * If we wish complete control over this use sam_hdr_add() directly. This
+ * function uses that, but attempts to do a lot of tedious house work for
+ * you too.
+ *
+ * - It will generate a suitable ID if the supplied one clashes.
+ * - It will generate multiple @PG records if we have multiple PG chains.
+ *
+ * Call it as per sam_hdr_add() with a series of key,value pairs ending
+ * in NULL.
+ *
+ * @return
+ * Returns 0 on success;
+ *        -1 on failure
+ */
+#define sam_hdr_add_PG sam_hdr_add_pg
+
+/*!
+ * A function to help with construction of CL tags in @PG records.
+ * Takes an argc, argv pair and returns a single space-separated string.
+ * This string should be deallocated by the calling function.
+ *
+ * @return
+ * Returns malloced char * on success;
+ *         NULL on failure
+ */
+char *stringify_argv(int argc, char *argv[]);
+
 /**@{ -------------------------------------------------------------------*/
 
 /*!

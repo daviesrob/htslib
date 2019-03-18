@@ -235,7 +235,7 @@ int sam_hdr_populate(bam_hdr_t *bh);
 /*! Creates an empty SAM header, ready to be populated.
  *
  * @return
- * Returns a sam_hdr_t struct on success (free with sam_hdr_free())
+ * Returns a sam_hdr_t struct on success (free with sam_hdr_destroy())
  *         NULL on failure
  */
 sam_hdr_t *sam_hdr_new(void);
@@ -283,7 +283,7 @@ int sam_hdr_rebuild_text(const sam_hdr_t *sh, kstring_t *ks);
  *
  * This is a synonym for sam_hdr_dec_ref().
  */
-void sam_hdr_free(sam_hdr_t *hdr);
+void sam_hdr_destroy(sam_hdr_t *hdr);
 
 /*!
  * @return

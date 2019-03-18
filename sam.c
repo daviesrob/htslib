@@ -89,7 +89,7 @@ void bam_hdr_destroy(bam_hdr_t *bh)
     if (bh->sdict) kh_destroy(s2i, (sdict_t*)bh->sdict);
     free(bh->text);
     if (bh->hdr)
-        sam_hdr_free(bh->hdr);
+        sam_hdr_destroy(bh->hdr);
     free(bh);
 }
 

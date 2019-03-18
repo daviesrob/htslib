@@ -763,7 +763,7 @@ int sam_hdr_populate(bam_hdr_t *bh) {
     // Parse existing header text
     if (bh->text && bh->l_text > 0) {
         if (sam_hdr_parse_lines(sh, bh->text, bh->l_text) != 0) {
-            sam_hdr_free(sh);
+            sam_hdr_destroy(sh);
             return -1;
         }
     }
@@ -1508,7 +1508,7 @@ sam_hdr_t *sam_hdr_dup(sam_hdr_t *h0) {
  *
  * This is a synonym for sam_hdr_dec_ref().
  */
-void sam_hdr_free(sam_hdr_t *hdr) {
+void sam_hdr_destroy(sam_hdr_t *hdr) {
     if (!hdr)
         return;
 
@@ -1759,7 +1759,7 @@ void sam_hdr_incr_ref(sam_hdr_t *sh) {
 void sam_hdr_decr_ref(sam_hdr_t *sh) {
     if (!sh)
         return;
-    sam_hdr_free(sh);
+    sam_hdr_destroy(sh);
 }
 
 void sam_hdr_dump(sam_hdr_t *sh) {
@@ -1858,4 +1858,23 @@ enum sam_group_order sam_hdr_group_order(sam_hdr_t *hdr) {
     }
 
     return go;
+}
+
+// Legacy functions from htslb/cram.h, included here for API compatibility.
+typedef bam_hdr_t SAM_hdr;
+
+SAM_hdr *sam_hdr_parse_(const char *hdr, int len) {
+    bam_hdr_t *bh = bam_hdr_init();
+    if (!bh) return NULL;
+
+    if (sam_hdr_add_lines(bh, hdr, len) != 0) {
+        bam_hdr_destroy(bh);
+        return NULL;
+    }
+
+    return bh;
+}
+
+void sam_hdr_free(SAM_hdr *hdr) {
+    bam_hdr_destroy(hdr);
 }
