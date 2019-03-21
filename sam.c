@@ -56,8 +56,6 @@ typedef khash_t(s2i) sdict_t;
 bam_hdr_t *bam_hdr_init()
 {
     bam_hdr_t *bh = (bam_hdr_t*)calloc(1, sizeof(bam_hdr_t));
-    if (bh)
-        bh->hdr = sam_hdr_new2();
 
     return bh;
 }
@@ -79,35 +77,60 @@ void bam_hdr_destroy(bam_hdr_t *bh)
     }
     free(bh->cigar_tab);
     if (bh->sdict) kh_destroy(s2i, (sdict_t*)bh->sdict);
-    if (bh->hdr) sam_hdr_free2(bh->hdr);
+    free(bh->text);
+    if (bh->hdr)
+        sam_hdr_free2(bh->hdr);
     free(bh);
 }
 
-bam_hdr_t *bam_hdr_dup(bam_hdr_t *h0)
+bam_hdr_t *bam_hdr_dup(const bam_hdr_t *h0)
 {
     if (h0 == NULL) return NULL;
     bam_hdr_t *h;
     if ((h = bam_hdr_init()) == NULL) return NULL;
     // copy the simple data
-    h->n_targets = h0->n_targets;
+    h->n_targets = 0;
     h->ignore_sam_err = h0->ignore_sam_err;
-    h->l_text = h0->l_text;
+    h->l_text = 0;
     // Then the pointery stuff
     h->cigar_tab = NULL;
     h->sdict = NULL;
 
-    h->target_len = (uint32_t*)calloc(h->n_targets, sizeof(uint32_t));
-    h->target_name = (char**)calloc(h->n_targets, sizeof(char*));
+    h->target_len = (uint32_t*)calloc(h0->n_targets, sizeof(uint32_t));
+    if (!h->target_len) goto fail;
+    h->target_name = (char**)calloc(h0->n_targets, sizeof(char*));
+    if (!h->target_name) goto fail;
+
     int i;
-    for (i = 0; i < h->n_targets; ++i) {
+    for (i = 0; i < h0->n_targets; ++i) {
         h->target_len[i] = h0->target_len[i];
         h->target_name[i] = strdup(h0->target_name[i]);
+        if (!h->target_name[i]) break;
     }
-    if (-1 == sam_hdr_parse2(h, sam_hdr_str2(h0), sam_hdr_length2(h0))) {
-        bam_hdr_destroy(h);
-        h = NULL;
+    h->n_targets = i;
+    if (i < h0->n_targets) goto fail;
+
+    if (h0->hdr) {
+        kstring_t tmp = { 0, 0, NULL };
+        if (sam_hdr_rebuild_text(h0->hdr, &tmp) != 0) {
+            free(ks_release(&tmp));
+            goto fail;
+        }
+
+        h->l_text = tmp.l;
+        h->text   = ks_release(&tmp);
+    } else {
+        h->l_text = h0->l_text;
+        h->text = malloc(h->l_text + 1);
+        if (!h->text) goto fail;
+        memcpy(h->text, h0->text, h->l_text);
+        h->text[h->l_text] = '\0';
     }
     return h;
+
+ fail:
+    bam_hdr_destroy(h);
+    return NULL;
 }
 
 
@@ -142,8 +165,8 @@ static bam_hdr_t *sam_hdr_from_dict(sdict_t *d)
 bam_hdr_t *bam_hdr_read(BGZF *fp)
 {
     bam_hdr_t *h;
-    char buf[4], *h_buf;
-    int magic_len, has_EOF, h_len;
+    char buf[4];
+    int magic_len, has_EOF;
     int32_t i, name_len, num_names = 0;
     size_t bufsize;
     ssize_t bytes;
@@ -164,19 +187,17 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     if (!h) goto nomem;
 
     // read plain text and the number of reference sequences
-    bytes = bgzf_read(fp, &h_len, 4);
+    bytes = bgzf_read(fp, &h->l_text, 4);
     if (bytes != 4) goto read_err;
-    if (fp->is_be) ed_swap_4p(&h_len);
+    if (fp->is_be) ed_swap_4p(&h->l_text);
 
-    bufsize = ((size_t) h_len) + 1;
-    if (bufsize < h_len) goto nomem; // so large that adding 1 overflowed
-    h_buf = (char*)malloc(bufsize);
-    if (!h_buf) goto nomem;
-    h_buf[h_len] = 0; // make sure it is NULL terminated
-    bytes = bgzf_read(fp, h_buf, h_len);
-    if (bytes != h_len) goto read_err;
-    if (-1 == sam_hdr_parse2(h, h_buf, h_len)) goto clean;
-    free(h_buf);
+    bufsize = ((size_t) h->l_text) + 1;
+    if (bufsize < h->l_text) goto nomem; // so large that adding 1 overflowed
+    h->text = (char*)malloc(bufsize);
+    if (!h->text) goto nomem;
+    h->text[h->l_text] = 0; // make sure it is NULL terminated
+    bytes = bgzf_read(fp, h->text, h->l_text);
+    if (bytes != h->l_text) goto read_err;
 
     bytes = bgzf_read(fp, &h->n_targets, 4);
     if (bytes != 4) goto read_err;
@@ -252,7 +273,9 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
 int bam_hdr_write(BGZF *fp, bam_hdr_t *h)
 {
     int32_t i, name_len, x;
-    if (-1 == sam_hdr_rebuild2(h)) return -1;
+    if (h->hdr) {
+        if (-1 == sam_hdr_rebuild2(h)) return -1;
+    }
     // write "BAM1"
     if (bgzf_write(fp, "BAM\1", 4) < 0) return -1;
     // write plain text and the number of reference sequences
@@ -1182,6 +1205,7 @@ bam_hdr_t *sam_hdr_read(htsFile *fp)
     case sam: {
         kstring_t str = { 0, 0, NULL };
         bam_hdr_t *h = NULL;
+        sdict_t *sq_dict = NULL;
         int ret, has_SQ = 0;
         int next_c = '@';
         while (next_c == '@' && (ret = hts_getline(fp, KS_SEP_LINE, &fp->line)) >= 0) {
@@ -1223,18 +1247,19 @@ bam_hdr_t *sam_hdr_read(htsFile *fp)
             if (e) goto error;
         }
         if (str.l == 0) kputsn("", 0, &str);
-        h = sam_hdr_from_dict(sam_hdr_parse_dict(str.s, str.l));
+        sq_dict = sam_hdr_parse_dict(str.s, str.l);
+        if (!sq_dict) goto error;
+        h = sam_hdr_from_dict(sq_dict);
         if (!h) goto error;
-        if (sam_hdr_parse2(h, str.s, str.l) != 0)
-            goto error;
-
-        KS_FREE(&str);
+        h->l_text = str.l;
+        h->text = ks_release(&str);
 
         fp->bam_header = sam_hdr_sanitise(h);
         fp->bam_header->ref_count = 1;
         return fp->bam_header;
 
      error:
+        if (sq_dict) kh_destroy(s2i, sq_dict);
         bam_hdr_destroy(h);
         KS_FREE(&str);
         return NULL;
@@ -1252,8 +1277,10 @@ int sam_hdr_write(htsFile *fp, bam_hdr_t *h)
         return -1;
     }
 
-    if (-1 == sam_hdr_rebuild2(h))
-        return -1;
+    if (h->hdr) {
+        if (-1 == sam_hdr_rebuild2(h))
+            return -1;
+    }
 
     if (!h->text)
         return 0;
@@ -1393,6 +1420,13 @@ int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
     return 0;
 }
 */
+
+int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
+{
+    if (sam_hdr_find_update2(h, "HD", NULL, NULL, key, val, NULL) != 0)
+        return -1;
+    return sam_hdr_rebuild2(h);
+}
 /**********************
  *** SAM record I/O ***
  **********************/

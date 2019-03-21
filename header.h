@@ -240,6 +240,14 @@ sam_hdr_t *sam_hdr_new2(void);
  */
 sam_hdr_t *sam_hdr_dup2(sam_hdr_t *hdr);
 
+/*! Reconstructs a kstring from the header hash table.
+ *
+ * @return
+ * Returns 0 on success
+ *        -1 on failure
+ */
+int sam_hdr_rebuild_text(const sam_hdr_t *sh, kstring_t *ks);
+
 /*! Deallocates all storage used by a sam_hdr_t struct.
  *
  * This also decrements the header reference count. If after decrementing

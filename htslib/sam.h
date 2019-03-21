@@ -286,7 +286,7 @@ bam_hdr_t *bam_hdr_read(BGZF *fp);
 int bam_hdr_write(BGZF *fp, bam_hdr_t *h) HTS_RESULT_USED;
 void bam_hdr_destroy(bam_hdr_t *h);
 int bam_name2id(bam_hdr_t *h, const char *ref);
-bam_hdr_t* bam_hdr_dup(bam_hdr_t *h0);
+bam_hdr_t* bam_hdr_dup(const bam_hdr_t *h0);
 
 typedef htsFile samFile;
 bam_hdr_t *sam_hdr_read(samFile *fp);
