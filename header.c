@@ -343,6 +343,7 @@ static int sam_hdr_vadd2(sam_hdr_t *sh, const char *type, va_list ap, ...) {
         h_type->order = 0;
     }
     h_type->comm = NULL;
+    h_type->skip = 0;
 
     // Any ... varargs
     va_start(args, ap);
