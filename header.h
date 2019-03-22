@@ -190,7 +190,6 @@ KHASH_MAP_INIT_STR(m_s2i2, int)
  * updated again.
  */
 struct sam_hdr {
-    kstring_t text;           //!< concatenated text, indexed by sam_hdr_tag
     khash_t(sam_hdr_t) *h;
     string_alloc_t *str_pool; //!< Pool of sam_hdr_tag->str strings
     pool_alloc_t   *type_pool;//!< Pool of sam_hdr_type structs

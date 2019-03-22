@@ -1177,12 +1177,20 @@ static bam_hdr_t *sam_hdr_sanitise(bam_hdr_t *h) {
             return NULL;
         }
 
-        if (kputc('\n', &h->hdr->text) < 0)
-            return NULL;
+        if (i >= h->l_text - 1) {
+            cp = realloc(h->text, (size_t) h->l_text+2);
+            if (!cp) {
+                bam_hdr_destroy(h);
+                return NULL;
+            }
+            h->text = cp;
+        }
+        cp[i++] = '\n';
 
-        /* Sync */
-        h->text = ks_str(&h->hdr->text);
-        h->l_text = ks_len(&h->hdr->text);
+        // l_text may be larger already due to multiple nul padding
+        if (h->l_text < i)
+            h->l_text = i;
+        cp[h->l_text] = '\0';
     }
 
     return h;
@@ -1347,8 +1355,8 @@ int sam_hdr_write(htsFile *fp, bam_hdr_t *h)
     }
     return 0;
 }
-/*
-int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
+
+static int old_sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
 {
     char *p, *q, *beg = NULL, *end = NULL, *newtext;
     if (!h || !key)
@@ -1419,12 +1427,23 @@ int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
     h->text = newtext;
     return 0;
 }
-*/
+
 
 int sam_hdr_change_HD(bam_hdr_t *h, const char *key, const char *val)
 {
-    if (sam_hdr_find_update2(h, "HD", NULL, NULL, key, val, NULL) != 0)
+    if (!h || !key)
         return -1;
+
+    if (!h->hdr)
+        return old_sam_hdr_change_HD(h, key, val);
+
+    if (val) {
+        if (sam_hdr_find_update2(h, "HD", NULL, NULL, key, val, NULL) != 0)
+            return -1;
+    } else {
+        if (sam_hdr_remove_tag2(h, "HD", NULL, NULL, key) != 0)
+            return -1;
+    }
     return sam_hdr_rebuild2(h);
 }
 /**********************

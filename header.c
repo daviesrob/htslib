@@ -540,11 +540,6 @@ static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
     if (!lines)
         return 0;
 
-    /* empty headers are allowed */
-    if (!lines[0]) {
-        kputsn("", 0, &sh->text);
-    }
-
     if (!len)
         len = strlen(lines);
 
@@ -552,7 +547,8 @@ static int sam_hdr_parse_lines(sam_hdr_t *sh, const char *lines, size_t len) {
     if (!hdr)
         return -1;
 
-    strncpy(hdr, lines, len);
+    memcpy(hdr, lines, len);
+    hdr[len] = '\0';
     for (i = 0, lno = 1; i < len && hdr[i] != '\0'; i++, lno++) {
         khint32_t type;
         khint_t k;
@@ -706,6 +702,20 @@ static int bootstrap_sam_hdr(bam_hdr_t *bh) {
     return 0;
 }
 
+/** Remove outdated header text
+    
+    @param bh     BAM header
+    
+    This is called when API functions have changed the header so that the
+    text version is no longer valid.
+ */
+static void redact_header_text(bam_hdr_t *bh) {
+    assert(bh->hdr && bh->hdr->dirty);
+    bh->l_text = 0;
+    free(bh->text);
+    bh->text = NULL;
+}
+
 /* ==== Public methods ==== */
 
 int sam_hdr_length2(bam_hdr_t *bh) {
@@ -737,8 +747,11 @@ const char *sam_hdr_str2(bam_hdr_t *bh) {
 int sam_hdr_add_lines2(bam_hdr_t *bh, const char *lines, int len) {
     sam_hdr_t *sh;
 
-    if (!bh)
+    if (!bh || !lines)
         return -1;
+
+    if (len == 0 && *lines == '\0')
+        return 0;
 
     if (!(sh = bh->hdr)) {
         if (bootstrap_sam_hdr(bh) != 0)
@@ -749,9 +762,8 @@ int sam_hdr_add_lines2(bam_hdr_t *bh, const char *lines, int len) {
     if (sam_hdr_parse_lines(sh, lines, len) != 0)
         return -1;
 
-    /* mark the new header as dirty to force a rebuild */
     sh->dirty = 1;
-    bh->l_text = 0;
+    redact_header_text(bh);
 
     return 0;
 }
@@ -781,8 +793,8 @@ int sam_hdr_add_line2(bam_hdr_t *bh, const char *type, ...) {
     int ret = sam_hdr_vadd2(sh, type, args, NULL);
     va_end(args);
 
-    if (!ret)
-        bh->l_text = 0;
+    if (ret >= 0 && sh->dirty)
+        redact_header_text(bh);
 
     return ret;
 }
@@ -874,10 +886,12 @@ int sam_hdr_remove_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key
     }
 
     sam_hdr_type2 *type_found = sam_hdr_find_type2(sh, type, ID_key, ID_value);
+    if (!type_found)
+        return 0;
 
     int ret = sam_hdr_remove_line(sh, type, type_found);
-    if (!ret)
-        bh->l_text = 0;
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
 
     return ret;
 }
@@ -924,8 +938,8 @@ int sam_hdr_remove_line_pos2(bam_hdr_t *bh, const char *type, int position) {
     } while (type_beg != type_end);
 
     int ret = sam_hdr_remove_line(sh, type, type_found);
-    if (!ret)
-        bh->l_text = 0;
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
 
     return ret;
 }
@@ -955,8 +969,8 @@ int sam_hdr_leave_line_key2(bam_hdr_t *bh, const char *type, const char *ID_key,
     while (step != type_found) {
         ret = sam_hdr_remove_line(sh, type, step);
         step = step->next;
-        if (!ret)
-            bh->l_text = 0;
+        if (!ret && sh->dirty)
+            redact_header_text(bh);
     }
 
     return 0;
@@ -1008,8 +1022,8 @@ int sam_hdr_remove_tag2(bam_hdr_t *bh,
         return -1;
 
     int ret = sam_hdr_remove_key2(sh, ty, key);
-    if (!ret)
-        bh->l_text = 0;
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
 
     return ret;
 }
@@ -1036,8 +1050,8 @@ int sam_hdr_find_update2(bam_hdr_t *bh, const char *type,
     ret = sam_hdr_update2(sh, ty, args);
     va_end(args);
 
-    if (!ret)
-        bh->l_text = 0;
+    if (!ret && sh->dirty)
+        redact_header_text(bh);
 
     return ret;
 }
@@ -1052,6 +1066,11 @@ int sam_hdr_rebuild_text(const sam_hdr_t *sh, kstring_t *ks) {
     int i;
 
     ks->l = 0;
+
+    if (!sh->h || !sh->h->size) {
+        return kputsn("", 0, ks) >= 0 ? 0 : -1;
+    }
+
     /* process the array keys first */
     for (i = 0; i < sh->type_count; i++) {
 
@@ -1099,9 +1118,6 @@ int sam_hdr_rebuild2(bam_hdr_t *bh) {
     if (!sh->dirty)
         return 0;
 
-    if (!sh->h || !sh->h->size)
-        goto sync;
-
     /* Order: HD then others */
     kstring_t ks = KS_INITIALIZER;
     if (sam_hdr_rebuild_text(sh, &ks) != 0) {
@@ -1109,17 +1125,12 @@ int sam_hdr_rebuild2(bam_hdr_t *bh) {
         return -1;
     }
 
-    if (ks_str(&sh->text))
-        KS_FREE(&sh->text);
-
-    sh->text = ks;
-
-sync:
     sh->dirty = 0;
 
     /* Sync */
-    bh->text = ks_str(&bh->hdr->text);
-    bh->l_text = ks_len(&bh->hdr->text);
+    free(bh->text);
+    bh->l_text = ks_len(&ks);
+    bh->text   = ks_release(&ks);
 
     return 0;
 }
@@ -1218,7 +1229,7 @@ int sam_hdr_link_pg2(bam_hdr_t *bh) {
 
     /* mark as dirty or empty for rebuild */
     sh->dirty = 1;
-    bh->l_text = 0;
+    redact_header_text(bh);
 
     return ret;
 }
@@ -1316,7 +1327,7 @@ int sam_hdr_add_PG2(bam_hdr_t *bh, const char *name, ...) {
     }
 
     sh->dirty = 1;
-    bh->l_text = 0;
+    redact_header_text(bh);
 
     return 0;
 }
@@ -1358,8 +1369,6 @@ sam_hdr_t *sam_hdr_new2() {
     sh->pg_end = NULL;
     if (!(sh->pg_hash = kh_init(m_s2i2)))
         goto err;
-
-    KS_INIT(&sh->text);
 
     if (!(sh->tag_pool = pool_create(sizeof(sam_hdr_tag2))))
         goto err;
@@ -1415,9 +1424,6 @@ void sam_hdr_free2(sam_hdr_t *hdr) {
 
     if (--hdr->ref_count > 0)
         return;
-
-    if (ks_str(&hdr->text))
-        KS_FREE(&hdr->text);
 
     if (hdr->h)
         kh_destroy(sam_hdr_t, hdr->h);
@@ -1614,19 +1620,18 @@ int sam_hdr_remove_key2(sam_hdr_t *sh,
     if (!sh)
         return -1;
     tag = sam_hdr_find_key2(type, key, &prev);
-    if (tag) { //tag exists
-        if (!prev) { //first tag
-            type->tag = tag->next;
-        } else {
-            prev->next = tag->next;
-        }
-        pool_free(sh->tag_pool, tag);
-        sh->dirty = 1; //mark text as dirty and force a rebuild
+    if (!tag)
+        return 0; // Not there anyway
 
-        return 0;
+    if (!prev) { //first tag
+        type->tag = tag->next;
+    } else {
+        prev->next = tag->next;
     }
-
-    return -1;
+    pool_free(sh->tag_pool, tag);
+    sh->dirty = 1; //mark text as dirty and force a rebuild
+    
+    return 0;
 }
 
 /*
