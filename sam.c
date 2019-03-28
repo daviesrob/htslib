@@ -78,9 +78,6 @@ void bam_hdr_destroy(bam_hdr_t *bh)
 
     if (bh == NULL) return;
 
-    if (bh->hdr && bh->hdr->ref_count > 0)
-        --bh->hdr->ref_count;
-
     if (bh->ref_count > 0) {
         --bh->ref_count;
         return;
@@ -94,7 +91,7 @@ void bam_hdr_destroy(bam_hdr_t *bh)
     }
     if (bh->sdict) kh_destroy(s2i, (sdict_t*)bh->sdict);
     free(bh->text);
-    if (bh->hdr && bh->hdr->ref_count <= 0)
+    if (bh->hdr)
         sam_hdr_destroy(bh->hdr);
     free(bh);
 }

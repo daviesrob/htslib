@@ -1533,9 +1533,9 @@ int bam_hdr_add_pg(bam_hdr_t *bh, const char *name, ...) {
  * sam_hdr_free when done, without causing errors for other open  files.
  */
 void bam_hdr_incr_ref(bam_hdr_t *bh) {
-    if (!bh || !bh->hdr)
+    if (!bh)
         return;
-    bh->hdr->ref_count++;
+    bh->ref_count++;
 }
 
 /* ==== Internal methods ==== */
@@ -1558,7 +1558,6 @@ sam_hdr_t *sam_hdr_new() {
         goto err;
 
     sh->ID_cnt = 1;
-    sh->ref_count = 1;
 
     sh->nref = 0;
     sh->ref_sz = 0;
@@ -1641,9 +1640,6 @@ sam_hdr_t *sam_hdr_dup(sam_hdr_t *h0) {
  */
 void sam_hdr_destroy(sam_hdr_t *hdr) {
     if (!hdr)
-        return;
-
-    if (--hdr->ref_count > 0)
         return;
 
     if (hdr->h)

@@ -219,7 +219,6 @@ struct sam_hdr {
     // @cond internal
     char ID_buf[1024];  // temporary buffer
     int ID_cnt;
-    int ref_count;      // number of uses of this sam_hdr_t
     // @endcond
 
     int dirty;                // marks the header as modified, so it can be rebuilt
