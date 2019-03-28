@@ -786,7 +786,7 @@ int bam_hdr_parse(bam_hdr_t *bh) {
 
     bh->hdr = sh;
 
-    if (sh->refs_changed && rebuild_target_arrays(bh) != 0)
+    if (sh->refs_changed >= 0 && rebuild_target_arrays(bh) != 0)
         return -1;
 
     bam_hdr_link_pg(bh);
@@ -896,7 +896,7 @@ int bam_hdr_add_lines(bam_hdr_t *bh, const char *lines, int len) {
     if (sam_hdr_parse_lines(sh, lines, len) != 0)
         return -1;
 
-    if (sh->refs_changed && rebuild_target_arrays(bh) != 0)
+    if (sh->refs_changed >= 0 && rebuild_target_arrays(bh) != 0)
         return -1;
 
     sh->dirty = 1;
@@ -931,7 +931,7 @@ int bam_hdr_add_line(bam_hdr_t *bh, const char *type, ...) {
     va_end(args);
 
     if (ret >= 0) {
-        if (sh->refs_changed && rebuild_target_arrays(bh) != 0)
+        if (sh->refs_changed >= 0 && rebuild_target_arrays(bh) != 0)
             return -1;
 
         if (sh->dirty)
