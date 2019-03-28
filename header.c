@@ -79,13 +79,16 @@ static int sam_hdr_update_hashes(sam_hdr_t *sh,
     /* Add to reference hash? */
     if ((type>>8) == 'S' && (type&0xff) == 'Q') {
         sam_hdr_tag_t *tag;
-        sam_hdr_sq_t *new_ref;
         int nref = sh->nref;
 
-        new_ref = realloc(sh->ref, (sh->nref+1)*sizeof(*sh->ref));
-        if (!new_ref)
-            return -1;
-        sh->ref = new_ref;
+        if (nref == sh->ref_sz) {
+            size_t new_sz = sh->ref_sz >= 4 ? sh->ref_sz + (sh->ref_sz / 4) : 32;
+            sam_hdr_sq_t *new_ref = realloc(sh->ref, sizeof(*sh->ref) * new_sz);
+            if (!new_ref)
+                return -1;
+            sh->ref = new_ref;
+            sh->ref_sz = new_sz;
+        }
 
         tag = h_type->tag;
         sh->ref[nref].name = NULL;
@@ -121,13 +124,16 @@ static int sam_hdr_update_hashes(sam_hdr_t *sh,
     /* Add to read-group hash? */
     if ((type>>8) == 'R' && (type&0xff) == 'G') {
         sam_hdr_tag_t *tag;
-        sam_hdr_rg_t *new_rg;
         int nrg = sh->nrg;
 
-        new_rg = realloc(sh->rg, (sh->nrg+1)*sizeof(*sh->rg));
-        if (!new_rg)
-            return -1;
-        sh->rg = new_rg;
+        if (nrg == sh->rg_sz) {
+            size_t new_sz = sh->rg_sz >= 4 ? sh->rg_sz + sh->rg_sz / 4 : 4;
+            sam_hdr_rg_t *new_rg = realloc(sh->rg, sizeof(*sh->rg) * new_sz);
+            if (!new_rg)
+                return -1;
+            sh->rg = new_rg;
+            sh->rg_sz = new_sz;
+        }
 
         tag = h_type->tag;
         sh->rg[nrg].name = NULL;
@@ -164,10 +170,14 @@ static int sam_hdr_update_hashes(sam_hdr_t *sh,
         sam_hdr_pg_t *new_pg;
         int npg = sh->npg;
 
-        new_pg = realloc(sh->pg, (sh->npg+1)*sizeof(*sh->pg));
-        if (!new_pg)
-            return -1;
-        sh->pg = new_pg;
+        if (npg == sh->pg_sz) {
+            size_t new_sz = sh->pg_sz >= 4 ? sh->pg_sz + sh->pg_sz / 4 : 4;
+            new_pg = realloc(sh->pg, sizeof(*sh->pg) * new_sz);
+            if (!new_pg)
+                return -1;
+            sh->pg = new_pg;
+            sh->pg_sz = new_sz;
+        }
 
         tag = h_type->tag;
         sh->pg[npg].name = NULL;
@@ -262,7 +272,7 @@ static int sam_hdr_remove_hash_entry(sam_hdr_t *sh, int type, sam_hdr_type_t *h_
                 k = kh_get(m_s2i, sh->ref_hash, key);
                 if (k != kh_end(sh->ref_hash)) {
                     int idx = kh_val(sh->ref_hash, k);
-                    if (idx < sh->nref-1)
+                    if (idx + 1 < sh->nref)
                         memmove(&sh->ref[idx], &sh->ref[idx+1],
                                 sizeof(sam_hdr_sq_t)*(sh->nref - idx - 1));
                     kh_del(m_s2i, sh->ref_hash, k);
@@ -286,7 +296,7 @@ static int sam_hdr_remove_hash_entry(sam_hdr_t *sh, int type, sam_hdr_type_t *h_
                     return -1;
                 k = kh_get(m_s2i, sh->rg_hash, key);
                 if (k != kh_end(sh->rg_hash)) {
-                    if (kh_val(sh->rg_hash, k) < sh->nrg-1)
+                    if (kh_val(sh->rg_hash, k) + 1 < sh->nrg)
                         memcpy(&sh->rg[kh_val(sh->rg_hash, k)], &sh->rg[kh_val(sh->rg_hash, k)+1], sizeof(sam_hdr_rg_t)*(sh->nrg - kh_val(sh->rg_hash, k) - 1));
                     kh_del(m_s2i, sh->rg_hash, k);
                     sh->nrg--;
@@ -1551,17 +1561,20 @@ sam_hdr_t *sam_hdr_new() {
     sh->ref_count = 1;
 
     sh->nref = 0;
+    sh->ref_sz = 0;
     sh->ref  = NULL;
     if (!(sh->ref_hash = kh_init(m_s2i)))
         goto err;
     sh->refs_changed = -1;
 
     sh->nrg = 0;
+    sh->rg_sz = 0;
     sh->rg  = NULL;
     if (!(sh->rg_hash = kh_init(m_s2i)))
         goto err;
 
     sh->npg = 0;
+    sh->pg_sz = 0;
     sh->pg  = NULL;
     sh->npg_end = sh->npg_end_alloc = 0;
     sh->pg_end = NULL;
