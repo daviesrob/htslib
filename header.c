@@ -825,10 +825,10 @@ const char *bam_hdr_str(bam_hdr_t *bh) {
 }
 
 int bam_hdr_nref(const bam_hdr_t *bh) {
-    if (!bh || !bh->hdr)
+    if (!bh)
         return -1;
 
-    return bh->hdr->nref;
+    return bh->hdr ? bh->hdr->nref : bh->n_targets;
 }
 
 /*
