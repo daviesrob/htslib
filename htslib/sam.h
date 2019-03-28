@@ -479,7 +479,7 @@ int bam_hdr_remove_lines(bam_hdr_t *bh, const char *type, const char *id, void *
  * @param ID_key    Tag key defining the line. Eg. "SN". Can be NULL, if looking for the first line.
  * @param ID_value  Tag value associated with the key above. Eg. "ref1". Can be NULL, if ID_key is NULL.
  * @param key       Key of the searched tag. Eg. "LN"
- * @return          A pointer to the key:value text on success, NULL on failure
+ * @return          1 if the key was removed; 0 if it was not present; -1 on error
  */
 char *bam_hdr_find_tag(bam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value, const char *key);
 
