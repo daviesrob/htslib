@@ -3801,7 +3801,9 @@ bam_hdr_t *cram_read_SAM_hdr(cram_fd *fd) {
         return NULL;
     }
 
-    free(header);
+    hdr->l_text = header_len;
+    hdr->text = header;
+
     return hdr;
 
 }
