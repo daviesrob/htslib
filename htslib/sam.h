@@ -326,6 +326,7 @@ int bam_name2id(bam_hdr_t *h, const char *ref);
 bam_hdr_t* bam_hdr_dup(const bam_hdr_t *h0);
 
 typedef htsFile samFile;
+bam_hdr_t *sam_hdr_parse(int l_text, const char *text);
 bam_hdr_t *sam_hdr_read(samFile *fp);
 int sam_hdr_write(samFile *fp, const bam_hdr_t *h) HTS_RESULT_USED;
 

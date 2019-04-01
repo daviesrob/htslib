@@ -1090,6 +1090,11 @@ hts_itr_t *sam_itr_regions(const hts_idx_t *idx, bam_hdr_t *hdr, hts_reglist_t *
 #include "htslib/kseq.h"
 #include "htslib/kstring.h"
 
+bam_hdr_t *sam_hdr_parse(int l_text, const char *text)
+{
+    return sam_hdr_parse_(text, l_text);
+}
+
 static sdict_t *sam_hdr_parse_dict(const char *text, int l_text)
 {
     const char *q, *r, *p;
