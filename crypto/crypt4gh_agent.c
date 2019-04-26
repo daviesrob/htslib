@@ -264,6 +264,7 @@ int open_socket(Agent_settings *settings) {
 }
 
 void cleanup(Agent_settings *settings) {
+    size_t i;
     if (settings->socket_fd >= 0) close(settings->socket_fd);
     if (settings->chld_fd[0] >= 0) close(settings->chld_fd[0]);
     if (settings->chld_fd[1] >= 0) close(settings->chld_fd[1]);
@@ -288,6 +289,8 @@ void cleanup(Agent_settings *settings) {
         }
         secure_free(settings->scratch.mem);
     }
+    for (i = 0; i < settings->nkeys; i++) free((char *) settings->keys[i].name);
+    free(settings->keys);
 }
 
 static char * get_user_shell() {
@@ -335,11 +338,11 @@ static int install_sig_handler(Agent_settings *settings) {
 }
 
 static int run_prog(Agent_settings *settings, int argc, char **argv) {
-    char *uargv[2] = { NULL, NULL };
+    char *uargv[2] = { NULL, NULL }, *ushell = NULL;
     pid_t pid;
 
     if (argc == 0) {
-        uargv[0] = get_user_shell();
+        uargv[0] = ushell = get_user_shell();
         argv = uargv;
         argc = 1;
     }
@@ -357,6 +360,7 @@ static int run_prog(Agent_settings *settings, int argc, char **argv) {
     }
     /* Parent */
     settings->chld_pid = pid;
+    free(ushell);
     return 0;
 }
 
