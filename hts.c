@@ -111,6 +111,7 @@ static enum htsFormatCategory format_category(enum htsExactFormat fmt)
         return region_list;
 
     case htsget:
+    case hts_crypt4gh_format:
         return unknown_category;
 
     case unknown_format:
@@ -291,6 +292,13 @@ int hts_detect_format(hFILE *hfile, htsFormat *fmt)
         fmt->category = unknown_category;
         fmt->format = htsget;
         fmt->version.major = fmt->version.minor = -1;
+        return 0;
+    }
+    else if (len >= 12 && memcmp(s, "crypt4gh", 8) == 0) {
+        fmt->category = unknown_category;
+        fmt->format = hts_crypt4gh_format;
+        fmt->version.major = le_to_u32(s + 8);
+        fmt->version.minor = -1;
         return 0;
     }
     else {
@@ -844,6 +852,17 @@ htsFile *hts_hopen(hFILE *hfile, const char *fn, const char *mode)
             if (hfile2 == NULL) goto error;
 
             // Build fp against the result of the redirection
+            hfile = hfile2;
+            if (hts_detect_format(hfile, &fp->format) < 0) goto error;
+        }
+
+        if (fp->format.format == hts_crypt4gh_format) {
+            hFILE *hfile2;
+            char simple_mode2[103];
+            strncpy(simple_mode2, simple_mode, sizeof(simple_mode2) - 2);
+            strcat(simple_mode2, ":");
+            hfile2 = hopen("crypt4gh:", simple_mode2, "parent", hfile);
+            if (hfile2 == NULL) goto error;
             hfile = hfile2;
             if (hts_detect_format(hfile, &fp->format) < 0) goto error;
         }

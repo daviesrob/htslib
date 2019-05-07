@@ -83,20 +83,23 @@ open_next:
                 (strlen(p->url) > 120)? "..." : "");
 
             fp->currentfp = p->headers?
-                  hopen(p->url, "r:",
+                  hopen(p->url, "rC:",
                         "httphdr:v", p->headers,
                         "auth_token_enabled", "false", NULL)
-                : hopen(p->url, "r:", "auth_token_enabled", "false", NULL);
+                : hopen(p->url, "rC:", "auth_token_enabled", "false", NULL);
 
             if (fp->currentfp == NULL) return -1;
         }
         else return 0;  // No more parts, so we're truly at EOF
     }
 
+#if 0
     n = fp->currentfp->mobile?
           fp->currentfp->backend->read(fp->currentfp, buffer, nbytes)
         : hread(fp->currentfp, buffer, nbytes);
-
+#else
+    n = hread(fp->currentfp, buffer, nbytes);
+#endif
     if (n == 0) {
         // We're at EOF on this part, so set up the next part
         hFILE *prevfp = fp->currentfp;

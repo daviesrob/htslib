@@ -478,19 +478,22 @@ static int handle_header_decrypt(Agent_settings *settings, Client *c,
     if (prevent_access(settings->keystore.mem) != 0)
         goto fail;
     secure_zero(header_key, header_key_len);
-    if (key >= settings->nkeys) goto fail;
-    if (decrypt_len < 4 + CC20_KEY_LEN) goto fail;
-    if (le_to_u32(decrypt + 2) != chacha20_ietf_poly1305) goto fail;
-    assert(6 + sizeof(c->txiv) + CC20_KEY_LEN + P1305_MAC_LEN
+    if (key >= settings->nkeys) {
+        u16_to_le(c4gh_msg_hdr_decrypt_fail, decrypt);
+        decrypt_len = 0;
+    } else if (decrypt_len < 4) {
+        goto fail;
+    }
+    assert(2 + sizeof(c->txiv) + decrypt_len + P1305_MAC_LEN
            < sizeof(c->wb) - c->wb_out);
     memcpy(c->wb + c->wb_out + 4, c->txiv, sizeof(c->txiv));
     if (chacha20_encrypt(c->wb + c->wb_out + 4 + sizeof(c->txiv), &encrypt_len,
-                         decrypt, CC20_KEY_LEN + 6,
+                         decrypt, decrypt_len + 2,
                          c->txiv, c->tx) != 0) {
         goto fail;
     }
     constant_time_increment(c->txiv, sizeof(c->txiv));
-    assert(encrypt_len == CC20_KEY_LEN + 6 + P1305_MAC_LEN);
+    assert(encrypt_len == 2 + decrypt_len + P1305_MAC_LEN);
     encrypt_len += sizeof(c->txiv);
     u32_to_le(encrypt_len, c->wb + c->wb_out);
     c->wb_out += 4 + encrypt_len;
@@ -506,39 +509,38 @@ static int handle_header_encrypt(Agent_settings *settings, Client *c,
                                  uint8_t *msg, size_t msg_len) {
     char *name;
     uint16_t name_len;
-    uint32_t hdr_version, hdr_encryption, data_encryption;
-    uint8_t *writer_pk, *header_key, *header_iv, *tmp, *decrypt;
-    const size_t tmp_len = 4 + CC20_KEY_LEN;
+    uint32_t hdr_version, hdr_encryption;
+    uint8_t *writer_pk, *header_key, *header_iv, *to_encrypt, *decrypt;
     const size_t decrypt_len = 256;
-    uint8_t *data_key;
     uint8_t *p;
-    size_t key, encrypt_len;
+    size_t key, encrypt_len, to_encrypt_len;
     size_t orig_scratch = settings->scratch.used;
 
     writer_pk  = get_scratch(settings, X25519_PK_LEN);
     header_key = get_scratch(settings, X25519_SESSION_LEN);
     header_iv  = get_scratch(settings, CC20_IV_LEN);
-    tmp        = get_scratch(settings, tmp_len);
     decrypt    = get_scratch(settings, decrypt_len);
     p = decrypt;
-    if (!writer_pk || !header_key || !header_iv || !tmp || !decrypt)
+    if (!writer_pk || !header_key || !header_iv || !decrypt)
         goto fail;
-    
+
     if (msg_len < 4) goto fail;
     assert(le_to_u16(msg) == c4gh_msg_hdr_encrypt);
     name_len = le_to_u16(msg + 2);
+    if (msg_len < 4 + name_len) goto fail;
 
     name = (char *) msg + 4;
     if (name_len < 1 || name[name_len - 1] != '\0') goto fail;
 
-    if (msg_len < 4 + name_len + 12 + CC20_KEY_LEN) goto fail;
-    hdr_version     = le_to_u32(msg + name_len + 4);
-    hdr_encryption  = le_to_u32(msg + name_len + 8);
-    data_encryption = le_to_u32(msg + name_len + 12);
-    data_key = msg + name_len + 16;
+    if (msg_len < 4 + name_len + 8) goto fail;
+    hdr_version     = le_to_u32(msg + 4 + name_len);
+    hdr_encryption  = le_to_u32(msg + 4 + name_len + 4);
 
-    if (hdr_version != 1 || hdr_encryption != 0 || data_encryption != 0)
+    if (hdr_version != 1 || hdr_encryption != 0)
         goto fail;
+
+    to_encrypt = msg + name_len + 12;
+    to_encrypt_len = msg_len - name_len - 12;
 
     if (allow_access(settings->keystore.mem, 1) != 0)
         goto fail;
@@ -556,21 +558,18 @@ static int handle_header_encrypt(Agent_settings *settings, Client *c,
     get_random_bytes(header_iv, CC20_IV_LEN);
 
     assert(6 + X25519_PK_LEN + CC20_IV_LEN
-           + 4 + CC20_KEY_LEN + P1305_MAC_LEN < decrypt_len);
+           + to_encrypt_len + P1305_MAC_LEN < decrypt_len);
 
     u16_to_le(c4gh_msg_hdr_encrypt, p); p += 2;
     u32_to_le(0, p); p += 4;
     memcpy(p, writer_pk, X25519_PK_LEN); p += X25519_PK_LEN;
     memcpy(p, header_iv, CC20_IV_LEN); p += CC20_IV_LEN;
 
-    u32_to_le(0, tmp);
-    memcpy(tmp + 4, data_key, CC20_KEY_LEN);
-
-    if (chacha20_encrypt(p, &encrypt_len, tmp, 4 + CC20_KEY_LEN,
+    if (chacha20_encrypt(p, &encrypt_len, to_encrypt, to_encrypt_len,
                          header_iv, header_key) != 0) {
         goto fail;
     }
-    assert(encrypt_len == 4 + CC20_KEY_LEN + P1305_MAC_LEN);
+    assert(encrypt_len == to_encrypt_len + P1305_MAC_LEN);
     p += encrypt_len;
 
     assert(p - decrypt + 4 < sizeof(c->wb) - c->wb_out);

@@ -90,9 +90,11 @@ noplugin_LIBS += $(HFILE_CRYPT4GH_LIBS)
 crypto/libhtscrypto.a: crypto/keyfile.pico
 	$(AR) -rc $@ crypto/keyfile.pico
 crypto/keyfile.pico: crypto/keyfile.c crypto/sodium_if.h config.h
-BUILT_PROGRAMS += crypto/crypt4gh_agent
+BUILT_PROGRAMS += crypto/crypt4gh_agent crypto/crypt4gh_add_edit_list
 crypto/crypt4gh_agent: crypto/crypt4gh_agent.o crypto/keyfile.pico
 	$(CC) $(LDFLAGS) -o $@ crypto/crypt4gh_agent.o crypto/keyfile.pico $(HFILE_CRYPT4GH_LIBS)
+crypto/crypt4gh_add_edit_list: crypto/crypt4gh_add_edit_list.o crypto/keyfile.pico
+	$(CC) $(LDFLAGS) -o $@ crypto/crypt4gh_add_edit_list.o crypto/keyfile.pico $(HFILE_CRYPT4GH_LIBS)
 endif
 
 ifeq "plugins-@enable_plugins@" "plugins-yes"

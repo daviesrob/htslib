@@ -1044,7 +1044,7 @@ hFILE *hopen(const char *fname, const char *mode, ...)
     else fp = hopen_fd(fname, mode);
 #ifdef ENABLE_HFILE_CRYPT4GH
     // Check for encrypted files
-    if (fp && strchr(mode, 'r') != NULL) {
+    if (fp && strchr(mode, 'r') != NULL && strchr(mode, 'C') == NULL) {
         char buffer[8];
         char mode2[16] = { 0 };
         ssize_t len = hpeek(fp, buffer, sizeof(buffer));
