@@ -42,13 +42,12 @@ void usage(FILE *fp, const char *prog) {
 uint32_t count_elements(const char *list) {
     const char *p = list;
     char *endp;
-    unsigned long long val;
     int32_t count = 0;
     
     for (;;) {
         while (*p != '\0' && *p < '0' && *p > '9') p++;
         if (*p == '\0') break;
-        val = strtoull(p, &endp, 0);
+        strtoull(p, &endp, 0);
         if (p != endp) count++;
         p = endp;
     }
