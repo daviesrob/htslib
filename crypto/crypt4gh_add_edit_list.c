@@ -43,7 +43,7 @@ uint32_t count_elements(const char *list) {
     const char *p = list;
     char *endp;
     int32_t count = 0;
-    
+
     for (;;) {
         while (*p != '\0' && *p < '0' && *p > '9') p++;
         if (*p == '\0') break;

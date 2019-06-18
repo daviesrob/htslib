@@ -770,7 +770,7 @@ static int import_key(Agent_settings *settings, const char *key_name,
     key = &keys[settings->nkeys];
     key->name = strdup(key_name ? key_name : key_file);
     if (!key->name) { perror(NULL); goto fail; }
-    
+
     if (read_key_file(key_file, tmp_k, X25519_PK_LEN, &is_public) != 0)
         goto fail;
     if (allow_access(settings->keystore.mem, 0) != 0)

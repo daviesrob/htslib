@@ -449,7 +449,7 @@ int write_key_file(const char *fname, uint8_t *key, size_t key_len,
                    int is_public, int is_encrypted) {
     int fd;
     FILE *kf = NULL;
-    const static char b64[65] = 
+    const static char b64[65] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         "ghijklmnopqrstuvwxyz0123456789+/";
     size_t i = 0;

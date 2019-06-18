@@ -444,7 +444,7 @@ static int read_encryption_header(hFILE_crypt4gh *fp) {
                         __func__, (unsigned int) pkt_len);
             goto fail;
         }
-        
+
         if (pkt_len + sk_name_len + 4 > sizeof(buffer)) {
             if (hts_verbose > 1)
                 fprintf(stderr, "[E::%s] CRYPT4GH_SECRET too long\n",
