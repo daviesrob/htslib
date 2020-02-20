@@ -44,7 +44,7 @@ DEALINGS IN THE SOFTWARE.  */
 static void hts_tpool_process_detach_locked(hts_tpool *p,
                                             hts_tpool_process *q);
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 static int worker_id(hts_tpool *p) {
@@ -57,12 +57,26 @@ static int worker_id(hts_tpool *p) {
     return -1;
 }
 
-void DBG_OUT(FILE *fp, char *fmt, ...) {
+HTS_FORMAT(HTS_PRINTF_FMT, 2, 3) void DBG_OUT(FILE *fp, char *fmt, ...) {
     va_list args;
+    struct timeval tv;
+    int l;
+    char buf[512];
+
+    gettimeofday(&tv, NULL);
+    l = snprintf(buf, sizeof(buf), "%ld.%06ld ",
+                 (long) tv.tv_sec, (long) tv.tv_usec);
+
     va_start(args, fmt);
-    vfprintf(fp, fmt, args);
+    l += vsnprintf(buf + l, sizeof(buf) - l, fmt, args);
     va_end(args);
+
+    fwrite(buf, 1, l, fp);
 }
+
+// These prevent warnings in -pedantic mode
+#define VP(p) ((void *) (p))
+#define VFP(fp) (*(void **) &(fp))
 #else
 #define DBG_OUT(...) do{}while(0)
 #endif
@@ -90,7 +104,7 @@ static int hts_tpool_add_result(hts_tpool_job *j, void *data) {
     pthread_mutex_lock(&q->p->pool_m);
 
     DBG_OUT(stderr, "%d: Adding result to queue %p, serial %"PRId64", %d of %d\n",
-            worker_id(j->p), q, j->serial, q->n_output+1, q->qsize);
+            worker_id(j->p), VP(q), j->serial, q->n_output+1, q->qsize);
 
     if (--q->n_processing == 0)
         pthread_cond_signal(&q->none_processing_c);
@@ -191,13 +205,13 @@ static hts_tpool_result *hts_tpool_next_result_locked(hts_tpool_process *q) {
 hts_tpool_result *hts_tpool_next_result(hts_tpool_process *q) {
     hts_tpool_result *r;
 
-    DBG_OUT(stderr, "Requesting next result on queue %p\n", q);
+    DBG_OUT(stderr, "Requesting next result on queue %p\n", VP(q));
 
     pthread_mutex_lock(&q->p->pool_m);
     r = hts_tpool_next_result_locked(q);
     pthread_mutex_unlock(&q->p->pool_m);
 
-    DBG_OUT(stderr, "(q=%p) Found %p\n", q, r);
+    DBG_OUT(stderr, "(q=%p) Found %p\n", VP(q), VP(r));
 
     return r;
 }
@@ -221,6 +235,8 @@ hts_tpool_result *hts_tpool_next_result_wait(hts_tpool_process *q) {
         struct timeval now;
         struct timespec timeout;
 
+        DBG_OUT(stderr, "Waiting for result on queue %p\n", VP(q));
+
         gettimeofday(&now, NULL);
         timeout.tv_sec = now.tv_sec + 10;
         timeout.tv_nsec = now.tv_usec * 1000;
@@ -239,6 +255,7 @@ hts_tpool_result *hts_tpool_next_result_wait(hts_tpool_process *q) {
     }
     pthread_mutex_unlock(&q->p->pool_m);
 
+    DBG_OUT(stderr, "Got result %p on queue %p\n", VP(r), VP(q));
     return r;
 }
 
@@ -390,7 +407,7 @@ hts_tpool_process *hts_tpool_process_init(hts_tpool *p, int qsize, int in_only) 
  * Must be called before the thread pool is destroyed.
  */
 void hts_tpool_process_destroy(hts_tpool_process *q) {
-    DBG_OUT(stderr, "Destroying results queue %p\n", q);
+    DBG_OUT(stderr, "Destroying results queue %p\n", VP(q));
 
     if (!q)
         return;
@@ -423,7 +440,7 @@ void hts_tpool_process_destroy(hts_tpool_process *q) {
 
     free(q);
 
-    DBG_OUT(stderr, "Destroyed results queue %p\n", q);
+    DBG_OUT(stderr, "Destroyed results queue %p\n", VP(q));
 }
 
 
@@ -583,8 +600,9 @@ static void *tpool_worker(void *arg) {
 
             pthread_mutex_unlock(&p->pool_m);
 
-            DBG_OUT(stderr, "%d: Processing queue %p, serial %"PRId64"\n",
-                    worker_id(j->p), q, j->serial);
+            DBG_OUT(stderr,
+                    "%d: Processing queue %p, func %p, serial %"PRId64"\n",
+                    worker_id(j->p), VP(q), VFP(j->func), j->serial);
 
             if (hts_tpool_add_result(j, j->func(j->arg)) < 0)
                 goto err;
@@ -770,7 +788,7 @@ int hts_tpool_dispatch3(hts_tpool *p, hts_tpool_process *q,
     pthread_mutex_lock(&p->pool_m);
 
     DBG_OUT(stderr, "Dispatching job for queue %p, serial %"PRId64"\n",
-            q, q->curr_serial);
+            VP(q), q->curr_serial);
 
     if ((q->no_more_input || q->n_input >= q->qsize) && nonblock == 1) {
         pthread_mutex_unlock(&p->pool_m);
@@ -859,7 +877,7 @@ int hts_tpool_process_flush(hts_tpool_process *q) {
     int i;
     hts_tpool *p = q->p;
 
-    DBG_OUT(stderr, "Flushing pool %p\n", p);
+    DBG_OUT(stderr, "Flushing pool %p\n", VP(p));
 
     // Drains the queue
     pthread_mutex_lock(&p->pool_m);
@@ -886,7 +904,7 @@ int hts_tpool_process_flush(hts_tpool_process *q) {
 
     pthread_mutex_unlock(&p->pool_m);
 
-    DBG_OUT(stderr, "Flushed complete for pool %p, queue %p\n", p, q);
+    DBG_OUT(stderr, "Flushed complete for pool %p, queue %p\n", VP(p), VP(q));
 
     return 0;
 }
@@ -984,7 +1002,7 @@ int hts_tpool_process_qsize(hts_tpool_process *q) {
 void hts_tpool_destroy(hts_tpool *p) {
     int i;
 
-    DBG_OUT(stderr, "Destroying pool %p\n", p);
+    DBG_OUT(stderr, "Destroying pool %p\n", VP(p));
 
     /* Send shutdown message to worker threads */
     pthread_mutex_lock(&p->pool_m);
@@ -1012,7 +1030,7 @@ void hts_tpool_destroy(hts_tpool *p) {
     free(p->t);
     free(p);
 
-    DBG_OUT(stderr, "Destroyed pool %p\n", p);
+    DBG_OUT(stderr, "Destroyed pool %p\n", VP(p));
 }
 
 
@@ -1023,7 +1041,7 @@ void hts_tpool_destroy(hts_tpool *p) {
 void hts_tpool_kill(hts_tpool *p) {
     int i;
 
-    DBG_OUT(stderr, "Destroying pool %p, kill=%d\n", p, kill);
+    DBG_OUT(stderr, "Destroying pool %p (hts_tpool_kill)\n", VP(p));
 
     for (i = 0; i < p->tsize; i++)
         pthread_kill(p->t[i].tid, SIGINT);
@@ -1038,7 +1056,7 @@ void hts_tpool_kill(hts_tpool *p) {
     free(p->t);
     free(p);
 
-    DBG_OUT(stderr, "Destroyed pool %p\n", p);
+    DBG_OUT(stderr, "Destroyed pool %p\n", VP(p));
 }
 
 
