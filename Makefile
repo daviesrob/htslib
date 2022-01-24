@@ -334,7 +334,7 @@ hts-$(LIBHTS_SOVERSION).def: hts-$(LIBHTS_SOVERSION).dll
 	gendef hts-$(LIBHTS_SOVERSION).dll
 
 hts-$(LIBHTS_SOVERSION).lib: hts-$(LIBHTS_SOVERSION).def
-	llvm-dlltool -m i386:x86-64 -d hts-$(LIBHTS_SOVERSION).def -l hts-$(LIBHTS_SOVERSION).lib
+	dlltool -m i386:x86-64 -d hts-$(LIBHTS_SOVERSION).def -l hts-$(LIBHTS_SOVERSION).lib
 
 # Bundling libraries, binaries, dll dependencies, and licenses into a
 # single directory.
