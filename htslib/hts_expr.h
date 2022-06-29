@@ -87,6 +87,11 @@ typedef int (hts_expr_sym_func)(void *data, char *str, char **end,
  *  the is_str member.  It can also be explicitly defined to be true even
  *  for a null value.  This may be used to check for the existence of
  *  something, irrespective of whether that something evaluates to zero.
+ *
+ *  @note To prevent memory leaks, always call hts_expr_val_free(res)
+ *        after hts_filter_eval().  This includes when calling it in
+ *        a loop with a recycled structure, as it will leak any live
+ *        pointers in res->s.s.
  */
 HTSLIB_EXPORT
 int hts_filter_eval(hts_filter_t *filt,
