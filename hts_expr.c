@@ -688,6 +688,15 @@ int hts_filter_eval(hts_filter_t *filt,
                     hts_expr_val_t *res) {
     char *end = NULL;
 
+    if (res->s.l != 0 || res->s.m != 0 || res->s.s != NULL) {
+        // As *res is cleared below, it's not safe to call this function
+        // with res->s.s set, as memory would be leaked.  It's also not
+        // possible to know is res was initialised correctly, so in
+        // either case we fail ungracefully.
+        fprintf(stderr, "hts_expr_val_t not initialised (with HTS_EXPR_VAL_INIT) or cleared (by hts_expr_val_free) correctly.  Not safe to continue, sorry.\n");
+        abort();
+    }
+
     memset(res, 0, sizeof(*res));
 
     filt->curr_regex = 0;
