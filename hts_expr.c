@@ -301,7 +301,7 @@ static int unary_expr(hts_filter_t *filt, void *data, hts_expr_sym_func *fn,
             res->is_str = 0;
         } else if (res->is_str) {
             res->is_str = 0;
-            res->d = res->is_true = (res->s.s == NULL);
+            res->d = res->is_true = (res->s.l == 0);
         } else {
             res->d = !(int64_t)res->d;
             res->is_true = res->d != 0;
@@ -503,26 +503,26 @@ static int cmp_expr(hts_filter_t *filt, void *data, hts_expr_sym_func *fn,
 
     if (*str == '>' && str[1] == '=') {
         err = cmp_expr(filt, data, fn, str+2, end, &val);
-        res->is_true=res->d = res->is_str && res->s.s && val.is_str && val.s.s
-            ? strcmp(res->s.s, val.s.s) >= 0
+        res->is_true=res->d = res->is_str && val.is_str
+            ? strcmp(ks_c_str(&res->s), ks_c_str(&val.s)) >= 0
             : !res->is_str && !val.is_str && res->d >= val.d;
         res->is_str = 0;
     } else if (*str == '>') {
         err = cmp_expr(filt, data, fn, str+1, end, &val);
-        res->is_true=res->d = res->is_str && res->s.s && val.is_str && val.s.s
-            ? strcmp(res->s.s, val.s.s) > 0
+        res->is_true=res->d = res->is_str && val.is_str
+            ? strcmp(ks_c_str(&res->s), ks_c_str(&val.s)) > 0
             : !res->is_str && !val.is_str && res->d > val.d;
         res->is_str = 0;
     } else if (*str == '<' && str[1] == '=') {
         err = cmp_expr(filt, data, fn, str+2, end, &val);
-        res->is_true=res->d = res->is_str && res->s.s && val.is_str && val.s.s
-            ? strcmp(res->s.s, val.s.s) <= 0
+        res->is_true=res->d = res->is_str && val.is_str
+            ? strcmp(ks_c_str(&res->s), ks_c_str(&val.s)) <= 0
             : !res->is_str && !val.is_str && res->d <= val.d;
         res->is_str = 0;
     } else if (*str == '<') {
         err = cmp_expr(filt, data, fn, str+1, end, &val);
-        res->is_true=res->d = res->is_str && res->s.s && val.is_str && val.s.s
-            ? strcmp(res->s.s, val.s.s) < 0
+        res->is_true=res->d = res->is_str && val.is_str
+            ? strcmp(ks_c_str(&res->s), ks_c_str(&val.s)) < 0
             : !res->is_str && !val.is_str && res->d < val.d;
         res->is_str = 0;
     }
@@ -555,8 +555,8 @@ static int eq_expr(hts_filter_t *filt, void *data, hts_expr_sym_func *fn,
         if ((err = eq_expr(filt, data, fn, str+2, end, &val))) {
             res->is_true = res->d = 0;
         } else {
-            res->is_true = res->d = res->is_str
-                ? (res->s.s && val.s.s ? strcmp(res->s.s, val.s.s)==0 : 0)
+            res->is_true = res->d = res->is_str && val.is_str
+                ? strcmp(ks_c_str(&res->s), ks_c_str(&val.s))==0
                 : !res->is_str && !val.is_str && res->d == val.d;
         }
         res->is_str = 0;
@@ -565,8 +565,8 @@ static int eq_expr(hts_filter_t *filt, void *data, hts_expr_sym_func *fn,
         if ((err = eq_expr(filt, data, fn, str+2, end, &val))) {
             res->is_true = res->d = 0;
         } else {
-            res->is_true = res->d = res->is_str
-                ? (res->s.s && val.s.s ? strcmp(res->s.s, val.s.s) != 0 : 1)
+            res->is_true = res->d = res->is_str && val.is_str
+                ? strcmp(ks_c_str(&res->s), ks_c_str(&val.s)) != 0
                 : res->is_str != val.is_str || res->d != val.d;
         }
         res->is_str = 0;
@@ -634,14 +634,14 @@ static int and_expr(hts_filter_t *filt, void *data, hts_expr_sym_func *fn,
         if (str[0] == '&' && str[1] == '&') {
             if (eq_expr(filt, data, fn, str+2, end, &val)) return -1;
             res->is_true = res->d =
-                (res->is_true || (res->is_str && res->s.s) || res->d) &&
-                (val.is_true  || (val.is_str && val.s.s) || val.d);
+                (res->is_true || (res->is_str && res->s.l) || res->d) &&
+                (val.is_true  || (val.is_str && val.s.l) || val.d);
             res->is_str = 0;
         } else if (str[0] == '|' && str[1] == '|') {
             if (eq_expr(filt, data, fn, str+2, end, &val)) return -1;
             res->is_true = res->d =
-                res->is_true || (res->is_str && res->s.s) || res->d ||
-                val.is_true  || (val.is_str  && val.s.s ) || val.d;
+                res->is_true || (res->is_str && res->s.l) || res->d ||
+                val.is_true  || (val.is_str  && val.s.l ) || val.d;
             res->is_str = 0;
         } else {
             break;
@@ -683,11 +683,39 @@ void hts_filter_free(hts_filter_t *filt) {
     free(filt);
 }
 
+int hts_filter_eval2(hts_filter_t *filt,
+                     void *data, hts_expr_sym_func *fn,
+                     hts_expr_val_t *res) {
+    char *end = NULL;
+
+    res->d = 0.0;
+    ks_clear(&res->s);
+    res->is_true = res->is_str = 0;
+
+    filt->curr_regex = 0;
+    if (expression(filt, data, fn, filt->str, &end, res))
+        return -1;
+
+    if (end && *ws(end)) {
+        fprintf(stderr, "Unable to parse expression at %s\n", filt->str);
+        return -1;
+    }
+
+    // Non-empty strings evaluate to true.  An empty string is false, unless
+    // overriden by is_true.
+    if (res->is_str) {
+        res->is_true |= res->s.l > 0;
+        res->d = res->is_true;
+    } else {
+        res->is_true |= res->d != 0;
+    }
+
+    return 0;
+}
+
 int hts_filter_eval(hts_filter_t *filt,
                     void *data, hts_expr_sym_func *fn,
                     hts_expr_val_t *res) {
-    char *end = NULL;
-
     if (res->s.l != 0 || res->s.m != 0 || res->s.s != NULL) {
         // As *res is cleared below, it's not safe to call this function
         // with res->s.s set, as memory would be leaked.  It's also not
@@ -699,25 +727,5 @@ int hts_filter_eval(hts_filter_t *filt,
 
     memset(res, 0, sizeof(*res));
 
-    filt->curr_regex = 0;
-    if (expression(filt, data, fn, filt->str, &end, res))
-        return -1;
-
-    if (end && *ws(end)) {
-        fprintf(stderr, "Unable to parse expression at %s\n", filt->str);
-        return -1;
-    }
-
-    // Strings evaluate to true.  An empty string is also true, but an
-    // absent (null) string is false, unless overriden by is_true.  An
-    // empty string has kstring length of zero, but a pointer as it's
-    // nul-terminated.
-    if (res->is_str) {
-        res->is_true |= res->s.s != NULL;
-        res->d = res->is_true;
-    } else {
-        res->is_true |= res->d != 0;
-    }
-
-    return 0;
+    return hts_filter_eval2(filt, data, fn, res);
 }

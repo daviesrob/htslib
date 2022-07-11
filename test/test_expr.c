@@ -88,10 +88,7 @@ typedef struct {
 } test_ev;
 
 static inline int strcmpnull(const char *a, const char *b) {
-    if (!a && !b) return  0;
-    if (!a &&  b) return -1;
-    if (a  && !b) return  1;
-    return strcmp(a, b);
+    return strcmp(a ? a : "", b ? b : "");
 }
 
 int test(void) {
@@ -183,7 +180,7 @@ int test(void) {
         { 1,  1, NULL, "((2*3)&7) > 4 && 2*2 <= 4"},
 
         { 1,  1, "plugh", "magic"},
-        { 1,  1, "",  "empty"},
+        { 0,  0, "",  "empty"},
         { 1,  1, NULL, "magic == \"plugh\""},
         { 1,  1, NULL, "magic != \"xyzzy\""},
 
@@ -226,7 +223,7 @@ int test(void) {
         hts_filter_t *filt = hts_filter_init(tests[i].str);
         if (!filt)
             return 1;
-        if (hts_filter_eval(filt, NULL, lookup, &r)) {
+        if (hts_filter_eval2(filt, NULL, lookup, &r)) {
             fprintf(stderr, "Failed to parse filter string %s\n",
                     tests[i].str);
             res = 1;
@@ -239,7 +236,7 @@ int test(void) {
                          || r.is_true != tests[i].truth_val)) {
             fprintf(stderr,
                     "Failed test: \"%s\" == \"%s\", got %s, \"%s\", %f\n",
-                    tests[i].str, tests[i].sval,
+                    tests[i].str, tests[i].sval ? tests[i].sval : "(null)",
                     r.is_true ? "true" : "false", r.s.s, r.d);
             res = 1;
         } else if (!r.is_str && (r.d != tests[i].dval
@@ -250,9 +247,9 @@ int test(void) {
             res = 1;
         }
 
-        hts_expr_val_free(&r);
         hts_filter_free(filt);
     }
+    hts_expr_val_free(&r);
 
     return res;
 }
@@ -261,7 +258,7 @@ int main(int argc, char **argv) {
     if (argc > 1) {
         hts_expr_val_t v = HTS_EXPR_VAL_INIT;
         hts_filter_t *filt = hts_filter_init(argv[1]);
-        if (hts_filter_eval(filt, NULL, lookup, &v))
+        if (hts_filter_eval2(filt, NULL, lookup, &v))
             return 1;
 
         if (v.is_str)

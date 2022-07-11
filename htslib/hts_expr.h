@@ -88,15 +88,26 @@ typedef int (hts_expr_sym_func)(void *data, char *str, char **end,
  *  for a null value.  This may be used to check for the existence of
  *  something, irrespective of whether that something evaluates to zero.
  *
- *  @note To prevent memory leaks, always call hts_expr_val_free(res)
- *        after hts_filter_eval().  This includes when calling it in
- *        a loop with a recycled structure, as it will leak any live
- *        pointers in res->s.s.
+ *  Use HTS_EXPR_VAL_INIT to set up @p res before passing it to this
+ *  function for the first time.
+ */
+HTSLIB_EXPORT
+int hts_filter_eval2(hts_filter_t *filt,
+                     void *data, hts_expr_sym_func *sym_func,
+                     hts_expr_val_t *res);
+
+/// Deprecated version of hts_filter_eval2
+/**
+ *  This function always zeroed out @p res (including the kstring part)
+ *  on entry.  This would cause memory leaks if @p res was reused
+ *  in later calls, unless hts_expr_val_free(res) was used between calls to
+ *  free the kstring pointer.
  */
 HTSLIB_EXPORT
 int hts_filter_eval(hts_filter_t *filt,
                     void *data, hts_expr_sym_func *sym_func,
-                    hts_expr_val_t *res);
+                    hts_expr_val_t *res)
+    HTS_DEPRECATED("Please use hts_filter_eval2 instead");
 
 
 #endif /* HTS_EXPR_H */
