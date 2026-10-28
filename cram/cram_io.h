@@ -233,7 +233,14 @@ static inline int block_resize(cram_block *b, size_t len) {
 
 /* Ensure the block can hold at least another 'l' bytes */
 static inline int block_grow(cram_block *b, size_t len) {
-    return block_resize(b, BLOCK_SIZE(b) + len);
+    if (b->alloc - BLOCK_SIZE(b) > len)
+        return 0;
+    size_t new_size = BLOCK_SIZE(b) + len;
+    if (new_size < len) {
+        errno = ENOMEM;
+        return -1;
+    }
+    return block_resize(b, new_size);
 }
 
 /* Append string 's' of length 'l'. */
